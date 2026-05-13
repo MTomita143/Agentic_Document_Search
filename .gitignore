@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# Local data
+data/raw/*
+!data/raw/.gitkeep
+
+# Generated indexes
+indexes/*.json
+
+# OS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
