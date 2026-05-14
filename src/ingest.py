@@ -1,11 +1,19 @@
 """
 Build a lightweight file-level metadata index.
 
-This is Phase 1 of Visual Memory Copilot:
-- Do NOT read document contents.
-- Do NOT create summaries.
-- Do NOT create embeddings.
-- Only collect lightweight metadata from file names and folder paths.
+```json
+{
+  "file_id": "file_xxxxx",
+  "filename": "Q4_Revenue_Update.pptx",
+  "title": "Q4_Revenue_Update",
+  "extension": ".pptx",
+  "relative_path": "CompanyA/Reports/Q4_Revenue_Update.pptx",
+  "parent_folder": "Reports",
+  "grandparent_folder": "CompanyA",
+  "folder_path": "CompanyA/Reports",
+  "type_label": "slide"
+}
+```
 
 Usage:
     python src/ingest.py --data-dir data/raw --output indexes/files_index.json
