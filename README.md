@@ -19,7 +19,7 @@ Vague recall (name, context, or topic)
 ## Project Structure
 
 ```text
-Agentic_Document_Search/
+./
 ├── data/
 │   └── raw/
 │       └── put your pdf/pptx/docx files here
