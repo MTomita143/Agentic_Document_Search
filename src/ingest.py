@@ -8,6 +8,8 @@ Build a lightweight file-level metadata index.
   "title": "Q4_Revenue_Update",
   "extension": ".pptx",
   "relative_path": "CompanyA/Reports/Q4_Revenue_Update.pptx",
+  "file_size_bytes": 1234567,
+  "file_size_label": "1.2 MB",
   "parent_folder": "Reports",
   "grandparent_folder": "CompanyA",
   "folder_path": "CompanyA/Reports",
@@ -82,6 +84,7 @@ def collect_file_metadata(data_dir: Path) -> list[dict[str, Any]]:
         relative_path = path.relative_to(data_dir)
         relative_path_str = relative_path.as_posix()
         folder_info = get_parent_parts(relative_path)
+        file_size_bytes = path.stat().st_size
 
         record = {
             "file_id": make_file_id(relative_path_str),
@@ -90,6 +93,8 @@ def collect_file_metadata(data_dir: Path) -> list[dict[str, Any]]:
             "extension": extension,
             "relative_path": relative_path_str,
             "absolute_path": str(path.resolve()),
+            "file_size_bytes": file_size_bytes,
+            "file_size_label": format_file_size(file_size_bytes),
             "parent_folder": folder_info["parent_folder"],
             "grandparent_folder": folder_info["grandparent_folder"],
             "folder_path": folder_info["folder_path"],
@@ -110,6 +115,21 @@ def infer_type_label(extension: str) -> str:
     if extension in {".doc", ".docx"}:
         return "document"
     return "unknown"
+
+
+def format_file_size(size_bytes: int) -> str:
+    """Format a byte count as a compact human-readable size."""
+    units = ["B", "KB", "MB", "GB"]
+    size = float(size_bytes)
+
+    for unit in units:
+        if size < 1024 or unit == units[-1]:
+            if unit == "B":
+                return f"{int(size)} {unit}"
+            return f"{size:.1f} {unit}"
+        size /= 1024
+
+    return f"{size_bytes} B"
 
 
 def save_json(records: list[dict[str, Any]], output_path: Path) -> None:

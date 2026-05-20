@@ -40,8 +40,25 @@ data/raw/
 
 Run:
 ```bash
-python src/ingest.py --data-dir data/raw --output indexes/files_index.json
+python3 src/ingest.py --data-dir data/raw --output indexes/files_index.json
 ```
+
+Search metadata locally:
+```bash
+python3 src/search.py --query "investor presentation" --mode local --top-k 3
+```
+
+Search metadata with Azure OpenAI reranking:
+```bash
+export AZURE_OPENAI_ENDPOINT="https://YOUR-RESOURCE.openai.azure.com"
+export AZURE_OPENAI_API_KEY="YOUR-KEY"
+export AZURE_OPENAI_DEPLOYMENT="YOUR-DEPLOYMENT-NAME"
+
+python3 src/search.py --query "the board slide deck" --mode llm --top-k 3
+```
+
+The LLM mode receives only candidate file metadata. It does not open document
+contents or inspect visual information.
 
 ## Roadmap / TODO
 
@@ -49,8 +66,9 @@ python src/ingest.py --data-dir data/raw --output indexes/files_index.json
 - [x] Create repository structure
 - [x] Create metadata ingestion script
 - [x] Save file-level metadata as JSON
-- [ ] Add simple keyword/fuzzy search over metadata
-- [ ] Return top-k candidate files with reasons
+- [x] Add simple keyword/fuzzy search over metadata
+- [x] Return top-k candidate files with reasons
+- [x] Add optional Azure OpenAI metadata reranking
 
 ### MVP v1
 - [ ] Read content only from candidate files
