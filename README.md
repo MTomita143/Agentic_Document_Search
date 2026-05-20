@@ -50,11 +50,21 @@ python3 src/search.py --query "investor presentation" --mode local --top-k 3
 
 Search metadata with Azure OpenAI reranking:
 ```bash
-export AZURE_OPENAI_ENDPOINT="https://YOUR-RESOURCE.openai.azure.com"
-export AZURE_OPENAI_API_KEY="YOUR-KEY"
-export AZURE_OPENAI_DEPLOYMENT="YOUR-DEPLOYMENT-NAME"
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+```
 
-python3 src/search.py --query "the board slide deck" --mode llm --top-k 3
+Create a local `.env` file:
+```bash
+AZURE_OPENAI_ENDPOINT="https://YOUR-RESOURCE.cognitiveservices.azure.com/"
+AZURE_OPENAI_API_KEY="YOUR-KEY"
+AZURE_OPENAI_DEPLOYMENT="gpt-5-mini"
+AZURE_OPENAI_API_VERSION="2024-12-01-preview"
+```
+
+Run:
+```bash
+.venv/bin/python src/search.py --query "the board slide deck" --mode llm --top-k 3
 ```
 
 The LLM mode receives only candidate file metadata. It does not open document

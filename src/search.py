@@ -6,8 +6,8 @@ contents. The LLM mode can reason over candidate metadata, but it receives no
 document text or visual information.
 
 Usage:
-    python src/search.py --query "investor presentation" --mode local --top-k 3
-    python src/search.py --query "deck for the board" --mode llm --top-k 3
+    python3 src/search.py --query "investor presentation" --mode local --top-k 3
+    python3 src/search.py --query "deck for the board" --mode llm --top-k 3
 """
 
 from __future__ import annotations
@@ -17,8 +17,6 @@ import json
 import os
 import re
 import sys
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -26,7 +24,7 @@ from typing import Any
 
 
 DEFAULT_INDEX_PATH = Path("indexes/files_index.json")
-DEFAULT_AZURE_OPENAI_API_VERSION = "2024-10-21"
+DEFAULT_AZURE_OPENAI_API_VERSION = "2024-12-01-preview"
 
 FIELD_WEIGHTS = {
     "filename": 5,
@@ -82,6 +80,16 @@ def load_index(index_path: Path) -> list[dict[str, Any]]:
         raise ValueError(f"Expected a list of records in {index_path}")
 
     return records
+
+
+def load_environment() -> None:
+    """Load local .env values when python-dotenv is installed."""
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+
+    load_dotenv()
 
 
 def normalize_text(value: Any) -> str:
@@ -304,12 +312,20 @@ def rerank_with_azure_openai(
             + ", ".join(missing)
         )
 
-    url = (
-        f"{endpoint.rstrip('/')}/openai/deployments/{deployment}"
-        f"/chat/completions?api-version={api_version}"
+    try:
+        from openai import AzureOpenAI
+    except ImportError as error:
+        raise RuntimeError(
+            "LLM mode needs the OpenAI SDK. Run: pip3 install -r requirements.txt"
+        ) from error
+
+    client = AzureOpenAI(
+        api_version=api_version,
+        azure_endpoint=endpoint,
+        api_key=api_key,
     )
-    payload = {
-        "messages": [
+    response = client.chat.completions.create(
+        messages=[
             {
                 "role": "system",
                 "content": (
@@ -361,28 +377,15 @@ def rerank_with_azure_openai(
                 ),
             },
         ],
-        "temperature": 0.1,
-        "response_format": {"type": "json_object"},
-    }
-
-    request = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "api-key": api_key,
-        },
-        method="POST",
+        max_completion_tokens=2000,
+        model=deployment,
+        response_format={"type": "json_object"},
     )
 
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            response_body = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as error:
-        details = error.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Azure OpenAI request failed: {details}") from error
+    content = response.choices[0].message.content
+    if not content:
+        raise ValueError("Azure OpenAI returned an empty message")
 
-    content = response_body["choices"][0]["message"]["content"]
     parsed = json.loads(content)
     results = parsed.get("results", [])
     if not isinstance(results, list):
@@ -453,6 +456,7 @@ def main() -> None:
     )
 
     args = parser.parse_args()
+    load_environment()
     records = load_index(args.index)
 
     if args.mode == "local":
