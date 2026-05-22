@@ -80,6 +80,11 @@ AZURE_OPENAI_ENDPOINT="https://YOUR-RESOURCE.cognitiveservices.azure.com/"
 AZURE_OPENAI_API_KEY="YOUR-KEY"
 AZURE_OPENAI_DEPLOYMENT="gpt-5-mini"
 AZURE_OPENAI_API_VERSION="2024-12-01-preview"
+
+AZURE_VISION_ENDPOINT="https://YOUR-VISION-RESOURCE.cognitiveservices.azure.com/"
+AZURE_VISION_KEY="YOUR-VISION-KEY"
+AZURE_VISION_API_VERSION="2024-02-01"
+AZURE_VISION_FEATURES="caption,denseCaptions,tags,read,objects"
 ```
 
 Run:
@@ -94,7 +99,19 @@ Run the agent flow with Azure OpenAI metadata reranking:
 
 The Azure OpenAI reranker receives only candidate file metadata. The agent can
 then inspect extracted PDF text locally for top candidates when useful. Visual
-inspection is still deferred.
+inspection renders only selected top-candidate PDF pages and sends those images
+to Azure Vision when `--visual-mode azure` is used or when `--visual-mode auto`
+sees visual clues.
+
+Run Azure Vision visual inspection:
+```bash
+.venv/bin/python src/agent.py \
+  --query "I remember a slide with a blue graph" \
+  --mode local \
+  --visual-mode azure \
+  --max-visual-files 2 \
+  --max-visual-pages-per-file 3
+```
 
 ## Roadmap / TODO
 
@@ -107,14 +124,15 @@ inspection is still deferred.
 - [x] Add optional Azure OpenAI metadata reranking
 
 ### MVP v1
-- [ ] Read content only from candidate files
-- [ ] Extract text from PDF
+- [x] Read content only from candidate files
+- [x] Extract text from PDF
 - [ ] Extract text from PPTX
-- [ ] Search page/slide-level text only after file-level filtering
+- [x] Search PDF page-level text only after file-level filtering
 
 ### MVP v2
-- [ ] Render selected pages/slides as images
-- [ ] Add visual labels such as graph, table, blue theme, layout type
+- [x] Render selected PDF pages as images for visual inspection
+- [x] Wire Azure Vision analysis for selected candidate pages
+- [ ] Add robust visual labels such as graph, table, blue theme, layout type
 - [ ] Search using visual memory queries
 
 ### MVP v3

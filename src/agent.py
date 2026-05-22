@@ -33,6 +33,12 @@ from search import (
     serialize_results,
     tokenize,
 )
+from visual import (
+    DEFAULT_VISUAL_CACHE_PATH,
+    VisualEvidence,
+    inspect_visuals_for_results,
+    missing_vision_config,
+)
 
 
 VISUAL_TERMS = {
@@ -134,6 +140,10 @@ def run_agent(
     max_pages_per_file: int,
     max_chars_per_file: int,
     content_cache_path: Path,
+    visual_mode: str,
+    max_visual_files: int,
+    max_visual_pages_per_file: int,
+    visual_cache_path: Path,
 ) -> AgentResponse:
     query_understanding = understand_query(query)
     records = load_index(index_path)
@@ -203,8 +213,24 @@ def run_agent(
     else:
         steps.append(make_content_skipped_step(query_understanding, results, content_mode))
 
-    if query_understanding.should_inspect_visuals:
-        steps.append(make_visual_step())
+    if should_run_visual_inspection(query_understanding, results, visual_mode):
+        missing_visual_config = missing_vision_config()
+        if missing_visual_config:
+            steps.append(make_visual_missing_config_step(missing_visual_config))
+        else:
+            visual_evidence = inspect_visuals_for_results(
+                query=query,
+                results=results,
+                max_files=max_visual_files,
+                max_pages_per_file=max_visual_pages_per_file,
+                cache_path=visual_cache_path,
+            )
+            apply_visual_evidence(results, visual_evidence)
+            results = sorted(results, key=lambda result: result.score, reverse=True)[:top_k]
+            evidence_scope = f"{evidence_scope} + Azure Vision page analysis"
+            steps.append(make_visual_step(visual_evidence))
+    elif query_understanding.should_inspect_visuals:
+        steps.append(make_visual_skipped_step(visual_mode))
 
     steps.append(make_answer_step(results))
 
@@ -246,6 +272,18 @@ def should_run_content_inspection(
     if not results:
         return True
     return results[0].score < 8
+
+
+def should_run_visual_inspection(
+    understanding: QueryUnderstanding,
+    results: list[SearchResult],
+    visual_mode: str,
+) -> bool:
+    if visual_mode == "azure":
+        return bool(results)
+    if visual_mode == "never":
+        return False
+    return bool(results and understanding.should_inspect_visuals)
 
 
 def make_content_skipped_step(
@@ -306,16 +344,58 @@ def make_content_step(content_evidence: list[ContentEvidence]) -> AgentStep:
     )
 
 
-def make_visual_step() -> AgentStep:
+def make_visual_step(visual_evidence: list[VisualEvidence]) -> AgentStep:
+    analyzed_files = len(visual_evidence)
+    analyzed_pages = sum(evidence.analyzed_pages for evidence in visual_evidence)
+    matched_files = sum(1 for evidence in visual_evidence if evidence.score > 0)
+    azure_calls = sum(evidence.azure_calls for evidence in visual_evidence)
+    cache_hits = sum(evidence.cache_hits for evidence in visual_evidence)
+    errors = [evidence.error for evidence in visual_evidence if evidence.error]
+
+    if errors:
+        return AgentStep(
+            name="Inspect Visuals",
+            status="partial",
+            detail=(
+                f"Analyzed {analyzed_files} files and {analyzed_pages} pages with "
+                f"Azure Vision. {matched_files} files had visual matches. "
+                f"{azure_calls} Azure calls, {cache_hits} cache hits. "
+                f"Some files were skipped: {'; '.join(errors)}."
+            ),
+        )
+
+    return AgentStep(
+        name="Inspect Visuals",
+        status="done",
+        detail=(
+            f"Analyzed {analyzed_files} files and {analyzed_pages} rendered pages "
+            f"with Azure Vision. {matched_files} files had visual matches. "
+            f"{azure_calls} Azure calls, {cache_hits} cache hits."
+        ),
+    )
+
+
+def make_visual_missing_config_step(missing_config: list[str]) -> AgentStep:
     return AgentStep(
         name="Inspect Visuals",
         status="deferred",
         detail=(
-            "The query includes visual clues. The next architecture layer should "
-            "render candidate pages or slides as images and inspect charts, tables, "
-            "layout, and colors."
+            "Azure Vision is selected for visual inspection, but credentials are "
+            "not configured yet. Add "
+            + ", ".join(missing_config)
+            + " to .env before running billable visual analysis."
         ),
     )
+
+
+def make_visual_skipped_step(visual_mode: str) -> AgentStep:
+    status = "skipped" if visual_mode == "never" else "deferred"
+    detail = (
+        "Visual inspection was disabled for this run."
+        if visual_mode == "never"
+        else "Visual inspection is available, but was not selected for this run."
+    )
+    return AgentStep(name="Inspect Visuals", status=status, detail=detail)
 
 
 def apply_content_evidence(
@@ -351,7 +431,44 @@ def apply_content_evidence(
             result.reasons.append("content snippet " + snippet)
 
 
+def apply_visual_evidence(
+    results: list[SearchResult],
+    visual_evidence: list[VisualEvidence],
+) -> None:
+    evidence_by_file_id = {
+        evidence.file_id: evidence
+        for evidence in visual_evidence
+    }
+
+    for result in results:
+        file_id = str(result.record.get("file_id"))
+        evidence = evidence_by_file_id.get(file_id)
+        if not evidence:
+            continue
+
+        if evidence.error:
+            result.reasons.append(evidence.error)
+            continue
+
+        if evidence.score <= 0:
+            result.reasons.append(
+                f"analyzed {evidence.analyzed_pages} rendered pages with Azure Vision; no visual query terms matched"
+            )
+            continue
+
+        result.score += evidence.score
+        result.reasons.append(
+            "visual analysis matched terms: " + ", ".join(evidence.matched_terms)
+        )
+        for observation in evidence.observations:
+            result.reasons.append("visual observation " + observation)
+
+
 def parse_content_cache_path(value: str) -> Path:
+    return Path(value)
+
+
+def parse_cache_path(value: str) -> Path:
     return Path(value)
 
 
@@ -482,6 +599,30 @@ def main() -> None:
         help="Path to the generated content text cache.",
     )
     parser.add_argument(
+        "--visual-mode",
+        choices=["auto", "azure", "never"],
+        default="auto",
+        help="When to analyze rendered candidate pages with Azure Vision.",
+    )
+    parser.add_argument(
+        "--max-visual-files",
+        type=parse_positive_int,
+        default=2,
+        help="Maximum number of candidate files to send to Azure Vision.",
+    )
+    parser.add_argument(
+        "--max-visual-pages-per-file",
+        type=parse_positive_int,
+        default=3,
+        help="Maximum rendered pages per file to send to Azure Vision.",
+    )
+    parser.add_argument(
+        "--visual-cache",
+        type=parse_cache_path,
+        default=DEFAULT_VISUAL_CACHE_PATH,
+        help="Path to the generated Azure Vision analysis cache.",
+    )
+    parser.add_argument(
         "--json",
         action="store_true",
         help="Print machine-readable JSON output.",
@@ -501,6 +642,10 @@ def main() -> None:
         max_pages_per_file=args.max_pages_per_file,
         max_chars_per_file=args.max_chars_per_file,
         content_cache_path=args.content_cache,
+        visual_mode=args.visual_mode,
+        max_visual_files=args.max_visual_files,
+        max_visual_pages_per_file=args.max_visual_pages_per_file,
+        visual_cache_path=args.visual_cache,
     )
 
     if args.json:
