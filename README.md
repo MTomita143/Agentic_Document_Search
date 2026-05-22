@@ -48,6 +48,26 @@ Search metadata locally:
 python3 src/search.py --query "investor presentation" --mode local --top-k 3
 ```
 
+Run the visible agent flow:
+```bash
+python3 src/agent.py --query "find the investor presentation deck" --mode local
+```
+
+The agent flow currently shows:
+
+```text
+understand query
+→ search metadata
+→ inspect extracted text from top candidate PDFs when useful
+→ decide whether visual inspection is needed next
+→ return ranked matches with reasons
+```
+
+Force local content inspection for the top candidates:
+```bash
+.venv/bin/python src/agent.py --query "find a report about open source" --mode local --content-mode always
+```
+
 Search metadata with Azure OpenAI reranking:
 ```bash
 python3 -m venv .venv
@@ -67,8 +87,14 @@ Run:
 .venv/bin/python src/search.py --query "the board slide deck" --mode llm --top-k 3
 ```
 
-The LLM mode receives only candidate file metadata. It does not open document
-contents or inspect visual information.
+Run the agent flow with Azure OpenAI metadata reranking:
+```bash
+.venv/bin/python src/agent.py --query "the board slide deck" --mode llm --top-k 3
+```
+
+The Azure OpenAI reranker receives only candidate file metadata. The agent can
+then inspect extracted PDF text locally for top candidates when useful. Visual
+inspection is still deferred.
 
 ## Roadmap / TODO
 

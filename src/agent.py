@@ -1,0 +1,514 @@
+"""
+Run the visible agentic document search flow.
+
+This MVP agent is intentionally lightweight. It shows how the system thinks,
+but only uses file-level metadata unless the user explicitly chooses a mode
+that calls Azure OpenAI for metadata reranking.
+
+Usage:
+    python3 src/agent.py --query "find the investor deck" --mode local
+    .venv/bin/python src/agent.py --query "find the investor deck" --mode llm
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from content import (
+    DEFAULT_CONTENT_CACHE_PATH,
+    ContentEvidence,
+    inspect_content_for_results,
+)
+from search import (
+    DEFAULT_INDEX_PATH,
+    SearchResult,
+    load_environment,
+    load_index,
+    search_llm,
+    search_local,
+    serialize_results,
+    tokenize,
+)
+
+
+VISUAL_TERMS = {
+    "blue",
+    "chart",
+    "diagram",
+    "graph",
+    "image",
+    "layout",
+    "picture",
+    "screenshot",
+    "table",
+    "visual",
+}
+
+CONTENT_TERMS = {
+    "about",
+    "analysis",
+    "content",
+    "explains",
+    "mentions",
+    "research",
+    "says",
+    "talks",
+    "topic",
+}
+
+FILE_TYPE_TERMS = {
+    "deck",
+    "doc",
+    "document",
+    "pdf",
+    "presentation",
+    "report",
+    "slide",
+    "slides",
+}
+
+PATH_TERMS = {
+    "directory",
+    "folder",
+    "path",
+}
+
+
+@dataclass
+class QueryUnderstanding:
+    query: str
+    metadata_clues: list[str]
+    content_clues: list[str]
+    visual_clues: list[str]
+    should_inspect_content: bool
+    should_inspect_visuals: bool
+
+
+@dataclass
+class AgentStep:
+    name: str
+    status: str
+    detail: str
+
+
+@dataclass
+class AgentResponse:
+    query_understanding: QueryUnderstanding
+    steps: list[AgentStep]
+    results: list[SearchResult]
+    evidence_scope: str
+
+
+def understand_query(query: str) -> QueryUnderstanding:
+    tokens = set(tokenize(query))
+
+    visual_clues = sorted(tokens & VISUAL_TERMS)
+    content_clues = sorted(tokens & CONTENT_TERMS)
+    metadata_clues = sorted(tokens & (FILE_TYPE_TERMS | PATH_TERMS))
+
+    should_inspect_visuals = bool(visual_clues)
+    should_inspect_content = bool(content_clues or should_inspect_visuals)
+
+    return QueryUnderstanding(
+        query=query,
+        metadata_clues=metadata_clues,
+        content_clues=content_clues,
+        visual_clues=visual_clues,
+        should_inspect_content=should_inspect_content,
+        should_inspect_visuals=should_inspect_visuals,
+    )
+
+
+def run_agent(
+    query: str,
+    index_path: Path,
+    mode: str,
+    top_k: int,
+    candidate_pool_size: int,
+    content_mode: str,
+    max_inspected_files: int,
+    max_pages_per_file: int,
+    max_chars_per_file: int,
+    content_cache_path: Path,
+) -> AgentResponse:
+    query_understanding = understand_query(query)
+    records = load_index(index_path)
+    steps: list[AgentStep] = []
+
+    steps.append(
+        AgentStep(
+            name="Understand Query",
+            status="done",
+            detail=format_understanding_detail(query_understanding),
+        )
+    )
+
+    if mode == "local":
+        results = search_local(query, records, top_k=top_k)
+        evidence_scope = "metadata only"
+        steps.append(
+            AgentStep(
+                name="Metadata Search",
+                status="done",
+                detail=(
+                    f"Searched {len(records)} file metadata records with local "
+                    f"keyword and fuzzy matching. Returned top {len(results)}."
+                ),
+            )
+        )
+    else:
+        results = search_llm(
+            query,
+            records,
+            top_k=top_k,
+            candidate_pool_size=candidate_pool_size,
+        )
+        evidence_scope = "metadata only with Azure OpenAI reranking"
+        steps.append(
+            AgentStep(
+                name="Metadata Search + LLM Rerank",
+                status="done",
+                detail=(
+                    f"Used local metadata search to create a candidate pool, "
+                    f"then reranked metadata only with Azure OpenAI. Returned "
+                    f"top {len(results)}."
+                ),
+            )
+        )
+
+    if should_run_content_inspection(query_understanding, results, content_mode):
+        if not results:
+            results = search_local(
+                query,
+                records,
+                top_k=max_inspected_files,
+                include_zero_scores=True,
+            )
+        content_evidence = inspect_content_for_results(
+            query=query,
+            results=results,
+            max_files=max_inspected_files,
+            max_pages_per_file=max_pages_per_file,
+            max_chars_per_file=max_chars_per_file,
+            cache_path=content_cache_path,
+        )
+        apply_content_evidence(results, content_evidence)
+        results = sorted(results, key=lambda result: result.score, reverse=True)[:top_k]
+        evidence_scope = f"{evidence_scope} + extracted PDF text"
+        steps.append(make_content_step(content_evidence))
+    else:
+        steps.append(make_content_skipped_step(query_understanding, results, content_mode))
+
+    if query_understanding.should_inspect_visuals:
+        steps.append(make_visual_step())
+
+    steps.append(make_answer_step(results))
+
+    return AgentResponse(
+        query_understanding=query_understanding,
+        steps=steps,
+        results=results,
+        evidence_scope=evidence_scope,
+    )
+
+
+def format_understanding_detail(understanding: QueryUnderstanding) -> str:
+    parts: list[str] = []
+
+    if understanding.metadata_clues:
+        parts.append("metadata clues: " + ", ".join(understanding.metadata_clues))
+    if understanding.content_clues:
+        parts.append("content clues: " + ", ".join(understanding.content_clues))
+    if understanding.visual_clues:
+        parts.append("visual clues: " + ", ".join(understanding.visual_clues))
+
+    if not parts:
+        return "No strong clue type detected, so start with metadata search."
+
+    return "; ".join(parts)
+
+
+def should_run_content_inspection(
+    understanding: QueryUnderstanding,
+    results: list[SearchResult],
+    content_mode: str,
+) -> bool:
+    if content_mode == "always":
+        return True
+    if content_mode == "never":
+        return False
+    if understanding.should_inspect_content or understanding.should_inspect_visuals:
+        return True
+    if not results:
+        return True
+    return results[0].score < 8
+
+
+def make_content_skipped_step(
+    understanding: QueryUnderstanding,
+    results: list[SearchResult],
+    content_mode: str,
+) -> AgentStep:
+    if not results:
+        return AgentStep(
+            name="Inspect Content",
+            status="skipped",
+            detail="No candidate files were found from metadata.",
+        )
+
+    if content_mode == "never":
+        return AgentStep(
+            name="Inspect Content",
+            status="skipped",
+            detail="Content inspection was disabled for this run.",
+        )
+
+    return AgentStep(
+        name="Inspect Content",
+        status="not needed yet",
+        detail=(
+            "The query appears answerable from filename, folder, file type, and "
+            "basic metadata for this MVP step."
+        ),
+    )
+
+
+def make_content_step(content_evidence: list[ContentEvidence]) -> AgentStep:
+    inspected_files = len(content_evidence)
+    inspected_pages = sum(evidence.inspected_pages for evidence in content_evidence)
+    matched_files = sum(1 for evidence in content_evidence if evidence.score > 0)
+    cache_hits = sum(1 for evidence in content_evidence if evidence.cache_hit)
+
+    errors = [evidence.error for evidence in content_evidence if evidence.error]
+    if errors:
+        return AgentStep(
+            name="Inspect Content",
+            status="partial",
+            detail=(
+                f"Inspected {inspected_files} candidate files and {inspected_pages} "
+                f"pages of extracted text. {matched_files} files had text matches. "
+                f"{cache_hits} cache hits. Some files were skipped: {'; '.join(errors)}."
+            ),
+        )
+
+    return AgentStep(
+        name="Inspect Content",
+        status="done",
+        detail=(
+            f"Inspected {inspected_files} candidate files and {inspected_pages} "
+            f"pages of extracted PDF text. {matched_files} files had text matches. "
+            f"{cache_hits} cache hits."
+        ),
+    )
+
+
+def make_visual_step() -> AgentStep:
+    return AgentStep(
+        name="Inspect Visuals",
+        status="deferred",
+        detail=(
+            "The query includes visual clues. The next architecture layer should "
+            "render candidate pages or slides as images and inspect charts, tables, "
+            "layout, and colors."
+        ),
+    )
+
+
+def apply_content_evidence(
+    results: list[SearchResult],
+    content_evidence: list[ContentEvidence],
+) -> None:
+    evidence_by_file_id = {
+        evidence.file_id: evidence
+        for evidence in content_evidence
+    }
+
+    for result in results:
+        file_id = str(result.record.get("file_id"))
+        evidence = evidence_by_file_id.get(file_id)
+        if not evidence:
+            continue
+
+        if evidence.error:
+            result.reasons.append(evidence.error)
+            continue
+
+        if evidence.score <= 0:
+            result.reasons.append(
+                f"inspected {evidence.inspected_pages} pages of PDF text; no query terms matched"
+            )
+            continue
+
+        result.score += evidence.score
+        result.reasons.append(
+            "content text matched terms: " + ", ".join(evidence.matched_terms)
+        )
+        for snippet in evidence.snippets:
+            result.reasons.append("content snippet " + snippet)
+
+
+def parse_content_cache_path(value: str) -> Path:
+    return Path(value)
+
+
+def parse_positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("value must be at least 1")
+    return parsed
+
+
+def make_answer_step(results: list[SearchResult]) -> AgentStep:
+    if not results:
+        return AgentStep(
+            name="Return Answer",
+            status="done",
+            detail="No match found from metadata.",
+        )
+
+    best = results[0].record
+    return AgentStep(
+        name="Return Answer",
+        status="done",
+        detail=f"Best current match is {best.get('filename')}.",
+    )
+
+
+def print_response(response: AgentResponse) -> None:
+    print(f"Query: {response.query_understanding.query}")
+    print(f"Evidence used: {response.evidence_scope}")
+    print()
+    print("Agent Steps")
+    for index, step in enumerate(response.steps, start=1):
+        print(f"{index}. {step.name} [{step.status}]")
+        print(f"   {step.detail}")
+    print()
+
+    if not response.results:
+        print("No metadata matches found.")
+        return
+
+    print("Results")
+    for index, result in enumerate(response.results, start=1):
+        record = result.record
+        print(f"{index}. {record.get('filename')}")
+        print(f"   score: {result.score:.2f}")
+        print(f"   path: {record.get('relative_path')}")
+        print(f"   type: {record.get('type_label')} | size: {record.get('file_size_label', 'unknown')}")
+        print("   reasons:")
+        for reason in result.reasons:
+            print(f"   - {reason}")
+        print()
+
+
+def response_to_json(response: AgentResponse) -> dict[str, Any]:
+    understanding = response.query_understanding
+    return {
+        "query": understanding.query,
+        "evidence_scope": response.evidence_scope,
+        "query_understanding": {
+            "metadata_clues": understanding.metadata_clues,
+            "content_clues": understanding.content_clues,
+            "visual_clues": understanding.visual_clues,
+            "should_inspect_content": understanding.should_inspect_content,
+            "should_inspect_visuals": understanding.should_inspect_visuals,
+        },
+        "steps": [
+            {
+                "name": step.name,
+                "status": step.status,
+                "detail": step.detail,
+            }
+            for step in response.steps
+        ],
+        "results": serialize_results(response.results),
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run the document search agent.")
+    parser.add_argument("--query", required=True, help="Natural-language search query.")
+    parser.add_argument(
+        "--index",
+        type=Path,
+        default=DEFAULT_INDEX_PATH,
+        help="Path to files_index.json.",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["local", "llm"],
+        default="local",
+        help="Use local metadata search or Azure OpenAI metadata reranking.",
+    )
+    parser.add_argument("--top-k", type=int, default=3, help="Number of results.")
+    parser.add_argument(
+        "--candidate-pool-size",
+        type=int,
+        default=8,
+        help="How many local candidates to send to Azure OpenAI in llm mode.",
+    )
+    parser.add_argument(
+        "--content-mode",
+        choices=["auto", "always", "never"],
+        default="auto",
+        help="When to inspect extracted text from candidate files.",
+    )
+    parser.add_argument(
+        "--max-inspected-files",
+        type=parse_positive_int,
+        default=3,
+        help="Maximum number of candidate files to open for content inspection.",
+    )
+    parser.add_argument(
+        "--max-pages-per-file",
+        type=parse_positive_int,
+        default=20,
+        help="Maximum PDF pages to extract per inspected file.",
+    )
+    parser.add_argument(
+        "--max-chars-per-file",
+        type=parse_positive_int,
+        default=30000,
+        help="Maximum extracted characters per inspected file.",
+    )
+    parser.add_argument(
+        "--content-cache",
+        type=parse_content_cache_path,
+        default=DEFAULT_CONTENT_CACHE_PATH,
+        help="Path to the generated content text cache.",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print machine-readable JSON output.",
+    )
+
+    args = parser.parse_args()
+    load_environment()
+
+    response = run_agent(
+        query=args.query,
+        index_path=args.index,
+        mode=args.mode,
+        top_k=args.top_k,
+        candidate_pool_size=args.candidate_pool_size,
+        content_mode=args.content_mode,
+        max_inspected_files=args.max_inspected_files,
+        max_pages_per_file=args.max_pages_per_file,
+        max_chars_per_file=args.max_chars_per_file,
+        content_cache_path=args.content_cache,
+    )
+
+    if args.json:
+        print(json.dumps(response_to_json(response), ensure_ascii=False, indent=2))
+        return
+
+    print_response(response)
+
+
+if __name__ == "__main__":
+    main()
