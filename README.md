@@ -53,6 +53,11 @@ Run the visible agent flow:
 python3 src/agent.py --query "find the investor presentation deck" --mode local
 ```
 
+Run the Streamlit prototype:
+```bash
+.venv/bin/streamlit run src/ui.py
+```
+
 The agent flow currently shows:
 
 ```text
@@ -112,6 +117,20 @@ Run Azure Vision visual inspection:
   --max-visual-files 2 \
   --max-visual-pages-per-file 3
 ```
+
+## Azure App Service
+
+For the hackathon deployment, Streamlit is the web interface and Azure App
+Service is the application execution platform.
+
+Use this startup command on App Service:
+
+```bash
+python -m streamlit run src/ui.py --server.port 8000 --server.address 0.0.0.0
+```
+
+Set the Azure OpenAI and Azure Vision values as App Service configuration
+environment variables. Do not upload a local `.env` file.
 
 ## Roadmap / TODO
 
