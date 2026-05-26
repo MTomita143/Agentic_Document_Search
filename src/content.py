@@ -9,7 +9,11 @@ experiments do not keep re-parsing the same PDFs.
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
+import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -18,10 +22,13 @@ from search import SearchResult, tokenize
 
 
 DEFAULT_CONTENT_CACHE_PATH = Path("indexes/content_cache.json")
-EXTRACTOR_VERSION = "office-v1"
+EXTRACTOR_VERSION = "office-ocr-v1"
 DOCX_CHUNK_CHARS = 2500
 MAX_EXCEL_ROWS_PER_SHEET = 200
 MAX_EXCEL_COLS_PER_SHEET = 50
+OCR_MIN_CHARS_PER_FILE = 120
+OCR_RENDER_DPI = 160
+OCR_TIMEOUT_SECONDS_PER_PAGE = 30
 SUPPORTED_CONTENT_EXTENSIONS = {".pdf", ".pptx", ".docx", ".xlsx", ".xlsm"}
 
 CONTENT_SCORE_STOPWORDS = {
@@ -56,6 +63,9 @@ class ContentEvidence:
     page_count: int
     cache_hit: bool
     error: str | None = None
+    ocr_used: bool = False
+    ocr_pages: int = 0
+    ocr_error: str | None = None
 
 
 def inspect_content_for_results(
@@ -114,6 +124,8 @@ def get_or_extract_document_text(
         "file_size_bytes": record.get("file_size_bytes"),
         "max_units": max_units,
         "max_chars": max_chars,
+        "ocr_min_chars_per_file": get_ocr_min_chars_per_file(),
+        "ocr_languages": get_ocr_languages(),
     }
 
     if cached and cached.get("cache_key") == cache_key:
@@ -139,15 +151,22 @@ def extract_document_text(
     extension = str(record.get("extension", "")).lower()
 
     if extension == ".pdf":
-        return extract_pdf_text(record, max_pages=max_units, max_chars=max_chars)
+        extracted = extract_pdf_text(record, max_pages=max_units, max_chars=max_chars)
     if extension == ".pptx":
-        return extract_pptx_text(record, max_slides=max_units, max_chars=max_chars)
+        extracted = extract_pptx_text(record, max_slides=max_units, max_chars=max_chars)
     if extension == ".docx":
-        return extract_docx_text(record, max_chunks=max_units, max_chars=max_chars)
+        extracted = extract_docx_text(record, max_chunks=max_units, max_chars=max_chars)
     if extension in {".xlsx", ".xlsm"}:
-        return extract_xlsx_text(record, max_sheets=max_units, max_chars=max_chars)
+        extracted = extract_xlsx_text(record, max_sheets=max_units, max_chars=max_chars)
+    if extension not in SUPPORTED_CONTENT_EXTENSIONS:
+        raise ValueError(f"content extraction for {extension} is not supported yet")
 
-    raise ValueError(f"content extraction for {extension} is not supported yet")
+    return add_local_ocr_fallback_if_needed(
+        record=record,
+        extracted=extracted,
+        max_units=max_units,
+        max_chars=max_chars,
+    )
 
 
 def extract_pdf_text(
@@ -377,6 +396,194 @@ def extract_xlsx_text(
     }
 
 
+def add_local_ocr_fallback_if_needed(
+    record: dict[str, Any],
+    extracted: dict[str, Any],
+    max_units: int,
+    max_chars: int,
+) -> dict[str, Any]:
+    char_count = int(extracted.get("char_count", 0))
+    minimum_chars = get_ocr_min_chars_per_file()
+    if char_count >= minimum_chars:
+        extracted["ocr"] = {
+            "attempted": False,
+            "used": False,
+            "reason": f"extracted text already had {char_count} characters",
+        }
+        return extracted
+
+    extension = str(record.get("extension", "")).lower()
+    if extension != ".pdf":
+        extracted["ocr"] = {
+            "attempted": False,
+            "used": False,
+            "reason": (
+                f"local OCR fallback for {extension} needs a page renderer; "
+                "the current MVP supports scanned PDF pages"
+            ),
+        }
+        return extracted
+
+    remaining_chars = max(max_chars - char_count, 0)
+    if remaining_chars <= 0:
+        extracted["ocr"] = {
+            "attempted": False,
+            "used": False,
+            "reason": "character budget was already exhausted",
+        }
+        return extracted
+
+    try:
+        ocr_result = ocr_pdf_pages(
+            record=record,
+            max_pages=max_units,
+            max_chars=remaining_chars,
+        )
+    except RuntimeError as error:
+        extracted["ocr"] = {
+            "attempted": True,
+            "used": False,
+            "error": str(error),
+        }
+        return extracted
+
+    pages_by_number = {
+        int(page.get("page_number", 0)): page
+        for page in extracted.get("pages", [])
+    }
+    ocr_pages = ocr_result["pages"]
+    for page in ocr_pages:
+        page_number = int(page["page_number"])
+        ocr_text = str(page["text"]).strip()
+        if not ocr_text:
+            continue
+
+        existing_page = pages_by_number.get(page_number)
+        if existing_page is None:
+            existing_page = {
+                "page_number": page_number,
+                "text": "",
+            }
+            extracted.setdefault("pages", []).append(existing_page)
+            pages_by_number[page_number] = existing_page
+
+        existing_text = str(existing_page.get("text", ""))
+        separator = "\n\n" if existing_text else ""
+        existing_page["text"] = f"{existing_text}{separator}[OCR text]\n{ocr_text}"
+
+    used = bool(ocr_pages)
+    extracted["ocr"] = {
+        "attempted": True,
+        "used": used,
+        "pages": [page["page_number"] for page in ocr_pages],
+        "source": "local_tesseract",
+        "languages": get_ocr_languages(),
+        "errors": ocr_result["errors"],
+    }
+    extracted["char_count"] = sum(
+        len(str(page.get("text", "")))
+        for page in extracted.get("pages", [])
+    )
+    extracted["inspected_pages"] = len(extracted.get("pages", []))
+    return extracted
+
+
+def ocr_pdf_pages(
+    record: dict[str, Any],
+    max_pages: int,
+    max_chars: int,
+) -> dict[str, Any]:
+    tesseract_path = shutil.which("tesseract")
+    if not tesseract_path:
+        raise RuntimeError(
+            "local OCR fallback needs the Tesseract command-line tool. "
+            "Install it locally, or keep relying on normal text extraction."
+        )
+
+    try:
+        import fitz
+    except ImportError as error:
+        raise RuntimeError(
+            "PDF OCR fallback needs PyMuPDF. Run: .venv/bin/python -m pip install -r requirements.txt"
+        ) from error
+
+    path = Path(str(record.get("absolute_path")))
+    languages = get_ocr_languages()
+    pages: list[dict[str, Any]] = []
+    errors: list[str] = []
+    total_chars = 0
+
+    with fitz.open(path) as document, tempfile.TemporaryDirectory() as tmp_dir:
+        page_count = min(document.page_count, max_pages)
+        zoom = OCR_RENDER_DPI / 72
+        matrix = fitz.Matrix(zoom, zoom)
+
+        for page_index in range(page_count):
+            if total_chars >= max_chars:
+                break
+
+            page = document.load_page(page_index)
+            image_path = Path(tmp_dir) / f"page-{page_index + 1}.png"
+            pixmap = page.get_pixmap(matrix=matrix, alpha=False)
+            pixmap.save(image_path)
+
+            try:
+                completed = subprocess.run(
+                    [
+                        tesseract_path,
+                        str(image_path),
+                        "stdout",
+                        "-l",
+                        languages,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=OCR_TIMEOUT_SECONDS_PER_PAGE,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired:
+                errors.append(f"page {page_index + 1}: OCR timed out")
+                continue
+            if completed.returncode != 0:
+                message = completed.stderr.strip() or "unknown OCR error"
+                errors.append(f"page {page_index + 1}: {message}")
+                continue
+
+            text = completed.stdout.strip()
+            if not text:
+                continue
+
+            remaining_chars = max_chars - total_chars
+            text = text[:remaining_chars]
+            total_chars += len(text)
+            pages.append(
+                {
+                    "page_number": page_index + 1,
+                    "text": text,
+                }
+            )
+
+    return {
+        "pages": pages,
+        "errors": errors,
+    }
+
+
+def get_ocr_min_chars_per_file() -> int:
+    value = os.getenv("ADS_OCR_MIN_CHARS", "").strip()
+    if not value:
+        return OCR_MIN_CHARS_PER_FILE
+
+    try:
+        return max(0, int(value))
+    except ValueError:
+        return OCR_MIN_CHARS_PER_FILE
+
+
+def get_ocr_languages() -> str:
+    return os.getenv("ADS_OCR_LANGS", "eng").strip() or "eng"
+
+
 def split_text_into_units(text: str, unit_size: int) -> list[str]:
     if not text:
         return []
@@ -414,6 +621,12 @@ def score_extracted_text(query: str, extracted: dict[str, Any]) -> ContentEviden
 
     unique_snippets = dedupe(snippets)[:3]
     score = float(len(matched_terms) * 6 + len(unique_snippets) * 2)
+    ocr = extracted.get("ocr") or {}
+    ocr_pages = ocr.get("pages") or []
+    ocr_error = ocr.get("error")
+    ocr_errors = ocr.get("errors") or []
+    if not ocr_error and ocr_errors:
+        ocr_error = "; ".join(str(error) for error in ocr_errors[:2])
 
     return ContentEvidence(
         file_id=file_id,
@@ -423,6 +636,9 @@ def score_extracted_text(query: str, extracted: dict[str, Any]) -> ContentEviden
         inspected_pages=int(extracted.get("inspected_pages", 0)),
         page_count=int(extracted.get("page_count", 0)),
         cache_hit=bool(extracted.get("cache_hit", False)),
+        ocr_used=bool(ocr.get("used", False)),
+        ocr_pages=len(ocr_pages),
+        ocr_error=ocr_error,
     )
 
 

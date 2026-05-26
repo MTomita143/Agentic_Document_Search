@@ -69,6 +69,7 @@ The agent flow currently shows:
 understand query
 → search metadata
 → inspect extracted text from top candidate documents when useful
+→ use local OCR fallback for scanned PDF pages when extracted text is too thin
 → prefilter rendered visual pages locally with CLIP
 → decide whether visual inspection is needed next
 → return ranked matches with reasons
@@ -96,6 +97,9 @@ AZURE_VISION_ENDPOINT="https://YOUR-VISION-RESOURCE.cognitiveservices.azure.com/
 AZURE_VISION_KEY="YOUR-VISION-KEY"
 AZURE_VISION_API_VERSION="2024-02-01"
 AZURE_VISION_FEATURES="caption,denseCaptions,tags,read,objects"
+
+ADS_OCR_MIN_CHARS="120"
+ADS_OCR_LANGS="eng"
 ```
 
 Run:
@@ -113,6 +117,14 @@ then inspect extracted PDF/PPTX/DOCX/XLSX text locally for top candidates when u
 inspection renders only selected top-candidate PDF pages and sends those images
 to Azure Vision when `--visual-mode azure` is used or when `--visual-mode auto`
 sees visual clues.
+
+If a candidate PDF has very little extractable text, the content layer can use
+local Tesseract OCR as a fallback. This is intentionally local and free of Azure
+OCR calls. The fallback is best for scanned PDFs. PPTX/DOCX image-only OCR needs
+a separate slide/page rendering strategy, so it is left as a later architecture
+choice. Set `ADS_OCR_LANGS` for installed Tesseract languages; for Japanese
+scanned documents, the local machine or deployment image needs Japanese
+Tesseract language data.
 
 Run Azure Vision visual inspection:
 ```bash
@@ -166,6 +178,7 @@ and startup time.
 - [x] Extract text from PPTX
 - [x] Extract text from DOCX
 - [x] Extract text from XLSX/XLSM
+- [x] Add local OCR fallback for scanned PDF pages with weak extracted text
 - [x] Search page/slide/chunk/sheet-level text only after file-level filtering
 
 ### MVP v2

@@ -216,7 +216,7 @@ def run_agent(
         )
         apply_content_evidence(results, content_evidence)
         results = sorted(results, key=lambda result: result.score, reverse=True)[:top_k]
-        evidence_scope = f"{evidence_scope} + extracted PDF text"
+        evidence_scope = f"{evidence_scope} + extracted candidate text"
         steps.append(make_content_step(content_evidence))
     else:
         steps.append(make_content_skipped_step(query_understanding, results, content_mode))
@@ -365,16 +365,30 @@ def make_content_step(content_evidence: list[ContentEvidence]) -> AgentStep:
     inspected_pages = sum(evidence.inspected_pages for evidence in content_evidence)
     matched_files = sum(1 for evidence in content_evidence if evidence.score > 0)
     cache_hits = sum(1 for evidence in content_evidence if evidence.cache_hit)
+    ocr_pages = sum(evidence.ocr_pages for evidence in content_evidence)
 
     errors = [evidence.error for evidence in content_evidence if evidence.error]
+    ocr_errors = [
+        evidence.ocr_error
+        for evidence in content_evidence
+        if evidence.ocr_error
+    ]
+    ocr_detail = (
+        f" Local OCR fallback contributed text from {ocr_pages} pages."
+        if ocr_pages
+        else ""
+    )
+    if ocr_errors:
+        ocr_detail += " OCR fallback notes: " + "; ".join(ocr_errors[:2]) + "."
     if errors:
         return AgentStep(
             name="Inspect Content",
             status="partial",
             detail=(
                 f"Inspected {inspected_files} candidate files and {inspected_pages} "
-                f"pages of extracted text. {matched_files} files had text matches. "
+                f"content units. {matched_files} files had text matches. "
                 f"{cache_hits} cache hits. Some files were skipped: {'; '.join(errors)}."
+                f"{ocr_detail}"
             ),
         )
 
@@ -383,8 +397,8 @@ def make_content_step(content_evidence: list[ContentEvidence]) -> AgentStep:
         status="done",
         detail=(
             f"Inspected {inspected_files} candidate files and {inspected_pages} "
-            f"pages of extracted PDF text. {matched_files} files had text matches. "
-            f"{cache_hits} cache hits."
+            f"content units. {matched_files} files had text matches. "
+            f"{cache_hits} cache hits.{ocr_detail}"
         ),
     )
 
@@ -529,14 +543,26 @@ def apply_content_evidence(
 
         if evidence.score <= 0:
             result.reasons.append(
-                f"inspected {evidence.inspected_pages} pages of PDF text; no query terms matched"
+                f"inspected {evidence.inspected_pages} content units; no query terms matched"
             )
+            if evidence.ocr_used:
+                result.reasons.append(
+                    f"local OCR fallback added text from {evidence.ocr_pages} pages"
+                )
+            elif evidence.ocr_error:
+                result.reasons.append("local OCR fallback note: " + evidence.ocr_error)
             continue
 
         result.score += evidence.score
         result.reasons.append(
             "content text matched terms: " + ", ".join(evidence.matched_terms)
         )
+        if evidence.ocr_used:
+            result.reasons.append(
+                f"local OCR fallback added text from {evidence.ocr_pages} pages"
+            )
+        elif evidence.ocr_error:
+            result.reasons.append("local OCR fallback note: " + evidence.ocr_error)
         for snippet in evidence.snippets:
             result.reasons.append("content snippet " + snippet)
 
@@ -728,7 +754,7 @@ def main() -> None:
         "--max-pages-per-file",
         type=parse_positive_int,
         default=20,
-        help="Maximum PDF pages to extract per inspected file.",
+        help="Maximum pages/slides/chunks/sheets to extract per inspected file.",
     )
     parser.add_argument(
         "--max-chars-per-file",

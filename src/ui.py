@@ -48,7 +48,7 @@ def main() -> None:
             "Text inspection",
             options=["auto", "always", "never"],
             index=0,
-            help="Inspects extracted PDF text from top candidate files only.",
+            help="Inspects extracted text from top candidate files only. Scanned PDFs can use local OCR fallback.",
         )
 
         visual_mode = st.selectbox(
