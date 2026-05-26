@@ -36,6 +36,9 @@ SUPPORTED_EXTENSIONS = {
     ".ppt",
     ".docx",
     ".doc",
+    ".xlsx",
+    ".xlsm",
+    ".xls",
 }
 
 
@@ -114,6 +117,8 @@ def infer_type_label(extension: str) -> str:
         return "pdf"
     if extension in {".doc", ".docx"}:
         return "document"
+    if extension in {".xlsx", ".xlsm", ".xls"}:
+        return "spreadsheet"
     return "unknown"
 
 

@@ -68,7 +68,7 @@ The agent flow currently shows:
 ```text
 understand query
 → search metadata
-→ inspect extracted text from top candidate PDFs when useful
+→ inspect extracted text from top candidate documents when useful
 → prefilter rendered visual pages locally with CLIP
 → decide whether visual inspection is needed next
 → return ranked matches with reasons
@@ -109,7 +109,7 @@ Run the agent flow with Azure OpenAI metadata reranking:
 ```
 
 The Azure OpenAI reranker receives only candidate file metadata. The agent can
-then inspect extracted PDF text locally for top candidates when useful. Visual
+then inspect extracted PDF/PPTX/DOCX/XLSX text locally for top candidates when useful. Visual
 inspection renders only selected top-candidate PDF pages and sends those images
 to Azure Vision when `--visual-mode azure` is used or when `--visual-mode auto`
 sees visual clues.
@@ -163,8 +163,10 @@ and startup time.
 ### MVP v1
 - [x] Read content only from candidate files
 - [x] Extract text from PDF
-- [ ] Extract text from PPTX
-- [x] Search PDF page-level text only after file-level filtering
+- [x] Extract text from PPTX
+- [x] Extract text from DOCX
+- [x] Extract text from XLSX/XLSM
+- [x] Search page/slide/chunk/sheet-level text only after file-level filtering
 
 ### MVP v2
 - [x] Render selected PDF pages as images for visual inspection
@@ -174,10 +176,11 @@ and startup time.
 - [ ] Search using visual memory queries
 
 ### MVP v3
-- [ ] Add LLM reranking
-- [ ] Generate user-facing explanation:
+- [x] Add Azure OpenAI metadata reranking
+- [x] Generate user-facing explanation:
   - why this file matched
   - which metadata/content/visual clues were used
+- [ ] Generate a polished final natural-language answer with an LLM
 
 ### Later idea: Lazy cache
 - [ ] Cache extracted text only after a file is opened once
