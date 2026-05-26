@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from search import SearchResult, tokenize
+from search import SearchResult, has_cjk, normalize_text, tokenize
 
 
 DEFAULT_CONTENT_CACHE_PATH = Path("indexes/content_cache.json")
@@ -599,7 +599,7 @@ def score_extracted_text(query: str, extracted: dict[str, Any]) -> ContentEviden
     query_terms = [
         term
         for term in tokenize(query)
-        if len(term) >= 3 and term not in CONTENT_SCORE_STOPWORDS
+        if (len(term) >= 3 or has_cjk(term)) and term not in CONTENT_SCORE_STOPWORDS
     ]
     matched_terms: set[str] = set()
     snippets: list[str] = []
@@ -643,19 +643,36 @@ def score_extracted_text(query: str, extracted: dict[str, Any]) -> ContentEviden
 
 
 def normalize_for_content(text: str) -> str:
-    return text.lower()
+    return normalize_text(text)
 
 
 def term_matches(normalized_text: str, term: str) -> bool:
+    if has_cjk(term):
+        return term in normalized_text
+
     pattern = rf"\b{re.escape(term)}[a-z0-9]*\b"
     return re.search(pattern, normalized_text) is not None
 
 
 def make_snippet(text: str, term: str, window: int = 80) -> str | None:
+    if has_cjk(term):
+        match = re.search(re.escape(term), text, re.IGNORECASE)
+        if not match:
+            normalized = normalize_for_content(text)
+            match = re.search(re.escape(term), normalized, re.IGNORECASE)
+            if not match:
+                return None
+            text = normalized
+        return make_snippet_from_match(text, match, window)
+
     match = re.search(rf"\b{re.escape(term)}[a-z0-9]*\b", text, re.IGNORECASE)
     if not match:
         return None
 
+    return make_snippet_from_match(text, match, window)
+
+
+def make_snippet_from_match(text: str, match: re.Match[str], window: int) -> str:
     start = max(match.start() - window, 0)
     end = min(match.end() + window, len(text))
     snippet = re.sub(r"\s+", " ", text[start:end]).strip()

@@ -153,6 +153,8 @@ def show_empty_state() -> None:
         - `Find a report about open source`
         - `Find the document that talks about telecom`
         - `I remember a slide with a blue graph`
+        - `売上分析のレポートを探して`
+        - `青いグラフがある資料`
         """
     )
 

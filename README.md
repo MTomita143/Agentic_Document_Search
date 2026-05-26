@@ -67,8 +67,8 @@ The agent flow currently shows:
 
 ```text
 understand query
-→ search metadata
-→ inspect extracted text from top candidate documents when useful
+→ search English/Japanese/mixed metadata
+→ inspect extracted English/Japanese/mixed text from top candidate documents when useful
 → use local OCR fallback for scanned PDF pages when extracted text is too thin
 → prefilter rendered visual pages locally with CLIP
 → decide whether visual inspection is needed next
@@ -79,6 +79,20 @@ Force local content inspection for the top candidates:
 ```bash
 .venv/bin/python src/agent.py --query "find a report about open source" --mode local --content-mode always
 ```
+
+Japanese and mixed-language queries are supported in the local layer when the
+query and candidate documents share Japanese or English terms:
+
+```bash
+.venv/bin/python src/agent.py --query "売上分析のレポートを探して" --mode local
+.venv/bin/python src/agent.py --query "青いグラフがある資料" --mode local
+```
+
+The local tokenizer uses Unicode normalization plus Japanese Kanji/Katakana
+term matching, so filenames and extracted text can be Japanese, English, or
+mixed. If the query is Japanese but the target document only contains English
+terms, use Azure OpenAI reranking or add Azure Translator query expansion later
+as a paid semantic bridge.
 
 Search metadata with Azure OpenAI reranking:
 ```bash
@@ -179,6 +193,7 @@ and startup time.
 - [x] Extract text from DOCX
 - [x] Extract text from XLSX/XLSM
 - [x] Add local OCR fallback for scanned PDF pages with weak extracted text
+- [x] Support Japanese and Japanese/English mixed metadata and content search
 - [x] Search page/slide/chunk/sheet-level text only after file-level filtering
 
 ### MVP v2

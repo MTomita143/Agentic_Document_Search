@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from search import SearchResult, tokenize
+from search import SearchResult, has_cjk, normalize_text, tokenize
 
 
 DEFAULT_VISUAL_CACHE_PATH = Path("indexes/visual_cache.json")
@@ -298,7 +298,7 @@ def score_visual_analyses(
     query_terms = [
         term
         for term in tokenize(query)
-        if len(term) >= 3 and term not in VISUAL_SCORE_STOPWORDS
+        if (len(term) >= 3 or has_cjk(term)) and term not in VISUAL_SCORE_STOPWORDS
     ]
     matched_terms: set[str] = set()
     observations: list[str] = []
@@ -419,11 +419,13 @@ def build_page_cache_key(
 
 
 def normalize_visual_text(text: str) -> str:
-    text = re.sub(r"([a-z])([A-Z])", r"\1 \2", text)
-    return text.lower()
+    return normalize_text(text)
 
 
 def term_matches(normalized_text: str, term: str) -> bool:
+    if has_cjk(term):
+        return term in normalized_text
+
     pattern = rf"\b{re.escape(term)}[a-z0-9]*\b"
     return re.search(pattern, normalized_text) is not None
 

@@ -33,6 +33,7 @@ from search import (
     SearchResult,
     load_environment,
     load_index,
+    normalize_text,
     search_llm,
     search_local,
     serialize_results,
@@ -47,6 +48,20 @@ from visual import (
 
 
 VISUAL_TERMS = {
+    "グラフ",
+    "スクショ",
+    "スクリーンショット",
+    "チャート",
+    "テーブル",
+    "レイアウト",
+    "画像",
+    "写真",
+    "青",
+    "青い",
+    "青の",
+    "図",
+    "図表",
+    "表",
     "blue",
     "chart",
     "diagram",
@@ -60,6 +75,13 @@ VISUAL_TERMS = {
 }
 
 CONTENT_TERMS = {
+    "について",
+    "トピック",
+    "内容",
+    "分析",
+    "書いて",
+    "調査",
+    "説明",
     "about",
     "analysis",
     "content",
@@ -72,6 +94,13 @@ CONTENT_TERMS = {
 }
 
 FILE_TYPE_TERMS = {
+    "スライド",
+    "プレゼン",
+    "レポート",
+    "報告",
+    "報告書",
+    "文書",
+    "資料",
     "deck",
     "doc",
     "document",
@@ -86,6 +115,10 @@ PATH_TERMS = {
     "directory",
     "folder",
     "path",
+    "フォルダ",
+    "フォルダー",
+    "場所",
+    "階層",
 }
 
 
@@ -116,10 +149,13 @@ class AgentResponse:
 
 def understand_query(query: str) -> QueryUnderstanding:
     tokens = set(tokenize(query))
+    normalized_query = normalize_text(query)
 
-    visual_clues = sorted(tokens & VISUAL_TERMS)
-    content_clues = sorted(tokens & CONTENT_TERMS)
-    metadata_clues = sorted(tokens & (FILE_TYPE_TERMS | PATH_TERMS))
+    visual_clues = sorted(collect_clues(tokens, normalized_query, VISUAL_TERMS))
+    content_clues = sorted(collect_clues(tokens, normalized_query, CONTENT_TERMS))
+    metadata_clues = sorted(
+        collect_clues(tokens, normalized_query, FILE_TYPE_TERMS | PATH_TERMS)
+    )
 
     should_inspect_visuals = bool(visual_clues)
     should_inspect_content = bool(content_clues or should_inspect_visuals)
@@ -132,6 +168,20 @@ def understand_query(query: str) -> QueryUnderstanding:
         should_inspect_content=should_inspect_content,
         should_inspect_visuals=should_inspect_visuals,
     )
+
+
+def collect_clues(
+    tokens: set[str],
+    normalized_query: str,
+    clue_terms: set[str],
+) -> set[str]:
+    clues = set(tokens & clue_terms)
+    clues.update(
+        term
+        for term in clue_terms
+        if term and term in normalized_query
+    )
+    return clues
 
 
 def run_agent(

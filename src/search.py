@@ -17,6 +17,7 @@ import json
 import os
 import re
 import sys
+import unicodedata
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -25,6 +26,33 @@ from typing import Any
 
 DEFAULT_INDEX_PATH = Path("indexes/files_index.json")
 DEFAULT_AZURE_OPENAI_API_VERSION = "2024-12-01-preview"
+CJK_RE = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uff66-\uff9f]+")
+TOKEN_RE = re.compile(r"[a-z0-9]+|[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uff66-\uff9f]+")
+SINGLE_CJK_TERMS = {"表", "図", "青", "赤", "黒", "白"}
+JAPANESE_DOMAIN_TERMS = {
+    "売上",
+    "予算",
+    "前年比",
+    "投資",
+    "投資家",
+    "市場",
+    "分析",
+    "調査",
+    "報告",
+    "報告書",
+    "資料",
+    "戦略",
+    "収益",
+    "財務",
+    "決算",
+    "会議",
+    "計画",
+    "製品",
+    "開発",
+    "研究",
+    "通信",
+    "金融",
+}
 
 FIELD_WEIGHTS = {
     "filename": 5,
@@ -104,15 +132,98 @@ def load_environment() -> None:
 
 def normalize_text(value: Any) -> str:
     text = "" if value is None else str(value)
+    text = unicodedata.normalize("NFKC", text)
     text = re.sub(r"([a-z])([A-Z])", r"\1 \2", text)
-    text = text.replace("_", " ").replace("-", " ").replace("/", " ")
+    text = re.sub(r"[_\-/\\.,:;()\[\]{}、。・：；（）「」『』【】]+", " ", text)
     return text.lower()
 
 
 def tokenize(value: Any) -> list[str]:
     normalized = normalize_text(value)
-    tokens = re.findall(r"[a-z0-9]+", normalized)
-    return [token for token in tokens if token not in STOPWORDS]
+    tokens: list[str] = []
+
+    for match in TOKEN_RE.finditer(normalized):
+        chunk = match.group(0)
+        if has_cjk(chunk):
+            tokens.extend(tokenize_cjk_chunk(chunk))
+        else:
+            tokens.append(chunk)
+
+    return dedupe_tokens(
+        token
+        for token in tokens
+        if token and token not in STOPWORDS
+    )
+
+
+def tokenize_cjk_chunk(chunk: str) -> list[str]:
+    tokens: list[str] = []
+
+    for run, script in iter_cjk_script_runs(chunk):
+        if script == "hiragana":
+            continue
+        tokens.extend(tokenize_cjk_noun_run(run, script))
+
+    return tokens
+
+
+def iter_cjk_script_runs(chunk: str) -> list[tuple[str, str]]:
+    runs: list[tuple[str, str]] = []
+    current = ""
+    current_script = ""
+
+    for char in chunk:
+        script = cjk_script(char)
+        if current and script != current_script:
+            runs.append((current, current_script))
+            current = ""
+        current += char
+        current_script = script
+
+    if current:
+        runs.append((current, current_script))
+
+    return runs
+
+
+def cjk_script(char: str) -> str:
+    codepoint = ord(char)
+    if 0x3040 <= codepoint <= 0x309F:
+        return "hiragana"
+    if 0x30A0 <= codepoint <= 0x30FF or 0xFF66 <= codepoint <= 0xFF9F:
+        return "katakana"
+    return "kanji"
+
+
+def tokenize_cjk_noun_run(chunk: str, script: str) -> list[str]:
+    if len(chunk) <= 1:
+        return [chunk] if chunk in SINGLE_CJK_TERMS else []
+
+    tokens = [chunk]
+    tokens.extend(
+        term
+        for term in JAPANESE_DOMAIN_TERMS
+        if term != chunk and term in chunk
+    )
+
+    return tokens
+
+
+def has_cjk(value: str) -> bool:
+    return CJK_RE.search(value) is not None
+
+
+def dedupe_tokens(values: Any) -> list[str]:
+    seen: set[str] = set()
+    output: list[str] = []
+
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        output.append(value)
+
+    return output
 
 
 def build_search_text(record: dict[str, Any]) -> dict[str, str]:
@@ -167,6 +278,9 @@ def score_record(query: str, record: dict[str, Any]) -> SearchResult:
 
 
 def best_fuzzy_token(query_token: str, field_tokens: list[str]) -> str | None:
+    if has_cjk(query_token):
+        return None
+
     if len(query_token) < 4:
         return None
 
@@ -187,11 +301,19 @@ def best_fuzzy_token(query_token: str, field_tokens: list[str]) -> str | None:
 
 
 def mentions_slides(query: str) -> bool:
+    normalized = normalize_text(query)
+    if any(word in normalized for word in ("スライド", "プレゼン", "発表資料")):
+        return True
+
     query_tokens = set(tokenize(query))
     return bool(query_tokens & {"deck", "presentation", "slide", "slides"})
 
 
 def mentions_report(query: str) -> bool:
+    normalized = normalize_text(query)
+    if any(word in normalized for word in ("レポート", "報告", "報告書", "調査")):
+        return True
+
     query_tokens = set(tokenize(query))
     return bool(query_tokens & {"annual", "report", "research"})
 
@@ -203,7 +325,18 @@ def looks_like_slides(record: dict[str, Any]) -> bool:
             for field in ("filename", "title", "folder_path", "type_label")
         )
     )
-    return any(word in text for word in ("deck", "presentation", "slide", "slides"))
+    return any(
+        word in text
+        for word in (
+            "deck",
+            "presentation",
+            "slide",
+            "slides",
+            "スライド",
+            "プレゼン",
+            "発表資料",
+        )
+    )
 
 
 def looks_like_report(record: dict[str, Any]) -> bool:
@@ -213,7 +346,18 @@ def looks_like_report(record: dict[str, Any]) -> bool:
             for field in ("filename", "title", "folder_path", "type_label")
         )
     )
-    return any(word in text for word in ("annual", "report", "research"))
+    return any(
+        word in text
+        for word in (
+            "annual",
+            "report",
+            "research",
+            "レポート",
+            "報告",
+            "報告書",
+            "調査",
+        )
+    )
 
 
 def dedupe(values: list[str]) -> list[str]:
