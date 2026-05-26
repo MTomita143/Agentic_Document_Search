@@ -18,6 +18,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from clip_prefilter import (
+    DEFAULT_CLIP_CACHE_PATH,
+    ClipEvidence,
+    rank_visual_pages_with_clip,
+)
 from content import (
     DEFAULT_CONTENT_CACHE_PATH,
     ContentEvidence,
@@ -141,9 +146,12 @@ def run_agent(
     max_chars_per_file: int,
     content_cache_path: Path,
     visual_mode: str,
+    visual_prefilter: str,
     max_visual_files: int,
     max_visual_pages_per_file: int,
+    max_clip_pages: int,
     visual_cache_path: Path,
+    clip_cache_path: Path,
 ) -> AgentResponse:
     query_understanding = understand_query(query)
     records = load_index(index_path)
@@ -213,22 +221,49 @@ def run_agent(
     else:
         steps.append(make_content_skipped_step(query_understanding, results, content_mode))
 
-    if should_run_visual_inspection(query_understanding, results, visual_mode):
-        missing_visual_config = missing_vision_config()
-        if missing_visual_config:
-            steps.append(make_visual_missing_config_step(missing_visual_config))
-        else:
-            visual_evidence = inspect_visuals_for_results(
+    selected_visual_pages: dict[str, list[int]] | None = None
+    clip_prefilter_failed = False
+
+    if should_run_clip_prefilter(query_understanding, results, visual_prefilter):
+        try:
+            clip_evidence, selected_visual_pages = rank_visual_pages_with_clip(
                 query=query,
                 results=results,
                 max_files=max_visual_files,
                 max_pages_per_file=max_visual_pages_per_file,
-                cache_path=visual_cache_path,
+                top_pages=max_clip_pages,
+                cache_path=clip_cache_path,
             )
-            apply_visual_evidence(results, visual_evidence)
+            apply_clip_evidence(results, clip_evidence)
             results = sorted(results, key=lambda result: result.score, reverse=True)[:top_k]
-            evidence_scope = f"{evidence_scope} + Azure Vision page analysis"
-            steps.append(make_visual_step(visual_evidence))
+            evidence_scope = f"{evidence_scope} + local CLIP page prefilter"
+            steps.append(make_clip_step(clip_evidence, max_clip_pages))
+        except RuntimeError as error:
+            clip_prefilter_failed = True
+            steps.append(make_clip_error_step(str(error)))
+    elif query_understanding.should_inspect_visuals:
+        steps.append(make_clip_skipped_step(visual_prefilter))
+
+    if should_run_visual_inspection(query_understanding, results, visual_mode):
+        if clip_prefilter_failed and visual_prefilter == "clip":
+            steps.append(make_visual_blocked_by_clip_step())
+        else:
+            missing_visual_config = missing_vision_config()
+            if missing_visual_config:
+                steps.append(make_visual_missing_config_step(missing_visual_config))
+            else:
+                visual_evidence = inspect_visuals_for_results(
+                    query=query,
+                    results=results,
+                    max_files=max_visual_files,
+                    max_pages_per_file=max_visual_pages_per_file,
+                    cache_path=visual_cache_path,
+                    pages_by_file_id=selected_visual_pages,
+                )
+                apply_visual_evidence(results, visual_evidence)
+                results = sorted(results, key=lambda result: result.score, reverse=True)[:top_k]
+                evidence_scope = f"{evidence_scope} + Azure Vision page analysis"
+                steps.append(make_visual_step(visual_evidence))
     elif query_understanding.should_inspect_visuals:
         steps.append(make_visual_skipped_step(visual_mode))
 
@@ -282,6 +317,16 @@ def should_run_visual_inspection(
     if visual_mode == "azure":
         return bool(results)
     if visual_mode == "never":
+        return False
+    return bool(results and understanding.should_inspect_visuals)
+
+
+def should_run_clip_prefilter(
+    understanding: QueryUnderstanding,
+    results: list[SearchResult],
+    visual_prefilter: str,
+) -> bool:
+    if visual_prefilter == "none":
         return False
     return bool(results and understanding.should_inspect_visuals)
 
@@ -344,6 +389,59 @@ def make_content_step(content_evidence: list[ContentEvidence]) -> AgentStep:
     )
 
 
+def make_clip_step(
+    clip_evidence: list[ClipEvidence],
+    max_clip_pages: int,
+) -> AgentStep:
+    rendered_files = len(clip_evidence)
+    rendered_pages = sum(evidence.rendered_pages for evidence in clip_evidence)
+    selected_pages = sum(len(evidence.selected_pages) for evidence in clip_evidence)
+    cache_hits = sum(evidence.cache_hits for evidence in clip_evidence)
+    errors = [evidence.error for evidence in clip_evidence if evidence.error]
+
+    if errors:
+        return AgentStep(
+            name="CLIP Visual Prefilter",
+            status="partial",
+            detail=(
+                f"Ranked rendered pages locally with CLIP. Selected "
+                f"{selected_pages} of at most {max_clip_pages} pages for visual "
+                f"verification. Rendered {rendered_pages} pages across "
+                f"{rendered_files} files, with {cache_hits} embedding cache hits. "
+                f"Some files were skipped: {'; '.join(errors)}."
+            ),
+        )
+
+    return AgentStep(
+        name="CLIP Visual Prefilter",
+        status="done",
+        detail=(
+            f"Ranked rendered pages locally with CLIP. Selected {selected_pages} "
+            f"of at most {max_clip_pages} pages for visual verification. "
+            f"Rendered {rendered_pages} pages across {rendered_files} files, "
+            f"with {cache_hits} embedding cache hits."
+        ),
+    )
+
+
+def make_clip_error_step(error: str) -> AgentStep:
+    return AgentStep(
+        name="CLIP Visual Prefilter",
+        status="deferred",
+        detail=error,
+    )
+
+
+def make_clip_skipped_step(visual_prefilter: str) -> AgentStep:
+    status = "skipped" if visual_prefilter == "none" else "not needed yet"
+    detail = (
+        "CLIP visual prefilter was disabled for this run."
+        if visual_prefilter == "none"
+        else "No visual clues were detected, so CLIP prefilter was not needed."
+    )
+    return AgentStep(name="CLIP Visual Prefilter", status=status, detail=detail)
+
+
 def make_visual_step(visual_evidence: list[VisualEvidence]) -> AgentStep:
     analyzed_files = len(visual_evidence)
     analyzed_pages = sum(evidence.analyzed_pages for evidence in visual_evidence)
@@ -371,6 +469,18 @@ def make_visual_step(visual_evidence: list[VisualEvidence]) -> AgentStep:
             f"Analyzed {analyzed_files} files and {analyzed_pages} rendered pages "
             f"with Azure Vision. {matched_files} files had visual matches. "
             f"{azure_calls} Azure calls, {cache_hits} cache hits."
+        ),
+    )
+
+
+def make_visual_blocked_by_clip_step() -> AgentStep:
+    return AgentStep(
+        name="Inspect Visuals",
+        status="skipped",
+        detail=(
+            "Azure Vision was not run because CLIP prefilter was selected but "
+            "could not run. This avoids sending unfiltered pages to a billable "
+            "visual verifier."
         ),
     )
 
@@ -429,6 +539,40 @@ def apply_content_evidence(
         )
         for snippet in evidence.snippets:
             result.reasons.append("content snippet " + snippet)
+
+
+def apply_clip_evidence(
+    results: list[SearchResult],
+    clip_evidence: list[ClipEvidence],
+) -> None:
+    evidence_by_file_id = {
+        evidence.file_id: evidence
+        for evidence in clip_evidence
+    }
+
+    for result in results:
+        file_id = str(result.record.get("file_id"))
+        evidence = evidence_by_file_id.get(file_id)
+        if not evidence:
+            continue
+
+        if evidence.error:
+            result.reasons.append(evidence.error)
+            continue
+
+        if evidence.score <= 0:
+            result.reasons.append(
+                f"CLIP ranked {evidence.rendered_pages} rendered pages; no selected page improved the match"
+            )
+            continue
+
+        result.score += evidence.score
+        result.reasons.append(
+            "CLIP selected visual pages: "
+            + ", ".join(str(page) for page in evidence.selected_pages)
+        )
+        for observation in evidence.observations:
+            result.reasons.append("CLIP observation " + observation)
 
 
 def apply_visual_evidence(
@@ -605,6 +749,12 @@ def main() -> None:
         help="When to analyze rendered candidate pages with Azure Vision.",
     )
     parser.add_argument(
+        "--visual-prefilter",
+        choices=["clip", "none"],
+        default="clip",
+        help="Use local CLIP to select visual pages before Azure Vision.",
+    )
+    parser.add_argument(
         "--max-visual-files",
         type=parse_positive_int,
         default=2,
@@ -617,10 +767,22 @@ def main() -> None:
         help="Maximum rendered pages per file to send to Azure Vision.",
     )
     parser.add_argument(
+        "--max-clip-pages",
+        type=parse_positive_int,
+        default=3,
+        help="Maximum CLIP-selected pages to send to Azure Vision.",
+    )
+    parser.add_argument(
         "--visual-cache",
         type=parse_cache_path,
         default=DEFAULT_VISUAL_CACHE_PATH,
         help="Path to the generated Azure Vision analysis cache.",
+    )
+    parser.add_argument(
+        "--clip-cache",
+        type=parse_cache_path,
+        default=DEFAULT_CLIP_CACHE_PATH,
+        help="Path to the generated CLIP embedding cache.",
     )
     parser.add_argument(
         "--json",
@@ -643,9 +805,12 @@ def main() -> None:
         max_chars_per_file=args.max_chars_per_file,
         content_cache_path=args.content_cache,
         visual_mode=args.visual_mode,
+        visual_prefilter=args.visual_prefilter,
         max_visual_files=args.max_visual_files,
         max_visual_pages_per_file=args.max_visual_pages_per_file,
+        max_clip_pages=args.max_clip_pages,
         visual_cache_path=args.visual_cache,
+        clip_cache_path=args.clip_cache,
     )
 
     if args.json:

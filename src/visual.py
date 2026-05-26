@@ -106,6 +106,7 @@ def inspect_visuals_for_results(
     max_pages_per_file: int,
     cache_path: Path = DEFAULT_VISUAL_CACHE_PATH,
     render_zoom: float = 1.5,
+    pages_by_file_id: dict[str, list[int]] | None = None,
 ) -> list[VisualEvidence]:
     config = load_vision_config()
     cache = load_cache(cache_path)
@@ -138,6 +139,11 @@ def inspect_visuals_for_results(
                 cache=cache,
                 max_pages=max_pages_per_file,
                 render_zoom=render_zoom,
+                page_numbers=(
+                    pages_by_file_id.get(str(record.get("file_id")))
+                    if pages_by_file_id
+                    else None
+                ),
             )
         )
 
@@ -152,6 +158,7 @@ def inspect_pdf_visuals(
     cache: dict[str, Any],
     max_pages: int,
     render_zoom: float,
+    page_numbers: list[int] | None = None,
 ) -> VisualEvidence:
     try:
         import fitz
@@ -168,7 +175,12 @@ def inspect_pdf_visuals(
 
     with fitz.open(path) as document:
         page_count = document.page_count
-        pages_to_analyze = choose_pages(page_count, max_pages)
+        pages_to_analyze = page_numbers or choose_pages(page_count, max_pages)
+        pages_to_analyze = [
+            page_number
+            for page_number in sorted(set(pages_to_analyze))
+            if 1 <= page_number <= page_count
+        ][:max_pages]
 
         for page_number in pages_to_analyze:
             cache_key = build_page_cache_key(

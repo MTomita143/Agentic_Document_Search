@@ -58,12 +58,18 @@ Run the Streamlit prototype:
 .venv/bin/streamlit run src/ui.py
 ```
 
+Optional: install the local CLIP visual prefilter:
+```bash
+.venv/bin/python -m pip install -r requirements-clip.txt
+```
+
 The agent flow currently shows:
 
 ```text
 understand query
 → search metadata
 → inspect extracted text from top candidate PDFs when useful
+→ prefilter rendered visual pages locally with CLIP
 → decide whether visual inspection is needed next
 → return ranked matches with reasons
 ```
@@ -113,10 +119,17 @@ Run Azure Vision visual inspection:
 .venv/bin/python src/agent.py \
   --query "I remember a slide with a blue graph" \
   --mode local \
+  --visual-prefilter clip \
   --visual-mode azure \
   --max-visual-files 2 \
-  --max-visual-pages-per-file 3
+  --max-visual-pages-per-file 6 \
+  --max-clip-pages 3
 ```
+
+With `--visual-prefilter clip`, the agent ranks rendered pages locally first and
+sends only the top CLIP-selected pages to Azure Vision. If CLIP is selected but
+not installed, Azure Vision is skipped to avoid sending unfiltered pages to a
+billable verifier.
 
 ## Azure App Service
 
@@ -131,6 +144,11 @@ python -m streamlit run src/ui.py --server.port 8000 --server.address 0.0.0.0
 
 Set the Azure OpenAI and Azure Vision values as App Service configuration
 environment variables. Do not upload a local `.env` file.
+
+The base deployment uses `requirements.txt`. CLIP is intentionally kept in
+`requirements-clip.txt` because it pulls in a heavier local ML stack. Add it to
+the deployment only if the App Service plan can handle the extra install size
+and startup time.
 
 ## Roadmap / TODO
 
@@ -150,6 +168,7 @@ environment variables. Do not upload a local `.env` file.
 
 ### MVP v2
 - [x] Render selected PDF pages as images for visual inspection
+- [x] Add optional local CLIP page prefilter
 - [x] Wire Azure Vision analysis for selected candidate pages
 - [ ] Add robust visual labels such as graph, table, blue theme, layout type
 - [ ] Search using visual memory queries

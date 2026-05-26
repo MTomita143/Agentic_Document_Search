@@ -58,6 +58,13 @@ def main() -> None:
             help="Azure Vision sends rendered PDF pages to Azure AI Vision and may cost money.",
         )
 
+        visual_prefilter = st.selectbox(
+            "Visual prefilter",
+            options=["clip", "none"],
+            index=0,
+            help="CLIP ranks rendered pages locally before Azure Vision verifies them.",
+        )
+
         st.divider()
         st.header("Limits")
         top_k = st.slider("Results", min_value=1, max_value=6, value=3)
@@ -72,8 +79,16 @@ def main() -> None:
         max_pages_per_file = st.slider("Text pages per file", 1, 40, 20)
         max_visual_files = st.slider("Visual files to inspect", 1, 4, 2)
         max_visual_pages_per_file = st.slider("Visual pages per file", 1, 6, 3)
+        max_clip_pages = st.slider("CLIP pages for Vision", 1, 8, 3)
 
-    show_cost_notice(mode, visual_mode, max_visual_files, max_visual_pages_per_file)
+    show_cost_notice(
+        mode,
+        visual_mode,
+        visual_prefilter,
+        max_visual_files,
+        max_visual_pages_per_file,
+        max_clip_pages,
+    )
 
     search_clicked = st.button("Search", type="primary")
 
@@ -89,6 +104,7 @@ def main() -> None:
     index_path = PROJECT_ROOT / DEFAULT_INDEX_PATH
     content_cache_path = PROJECT_ROOT / "indexes/content_cache.json"
     visual_cache_path = PROJECT_ROOT / "indexes/visual_cache.json"
+    clip_cache_path = PROJECT_ROOT / "indexes/clip_visual_cache.json"
 
     with st.spinner("Running agentic search..."):
         try:
@@ -104,9 +120,12 @@ def main() -> None:
                 max_chars_per_file=30000,
                 content_cache_path=content_cache_path,
                 visual_mode=visual_mode,
+                visual_prefilter=visual_prefilter,
                 max_visual_files=max_visual_files,
                 max_visual_pages_per_file=max_visual_pages_per_file,
+                max_clip_pages=max_clip_pages,
                 visual_cache_path=visual_cache_path,
+                clip_cache_path=clip_cache_path,
             )
         except Exception as error:
             st.error(str(error))
@@ -141,23 +160,52 @@ def show_empty_state() -> None:
 def show_cost_notice(
     mode: str,
     visual_mode: str,
+    visual_prefilter: str,
     max_visual_files: int,
     max_visual_pages_per_file: int,
+    max_clip_pages: int,
 ) -> None:
     if mode == "llm":
         st.warning("Azure OpenAI reranking is enabled. This may use paid tokens.")
 
+    if visual_prefilter == "clip":
+        st.info(
+            "CLIP prefilter is local. First use may require installing optional dependencies "
+            "and downloading the CLIP model."
+        )
+
     if visual_mode == "azure":
-        max_calls = max_visual_files * max_visual_pages_per_file
+        max_calls = estimate_vision_calls(
+            visual_prefilter,
+            max_visual_files,
+            max_visual_pages_per_file,
+            max_clip_pages,
+        )
         st.warning(
             f"Azure Vision is enabled. This run can make up to {max_calls} image-analysis calls."
         )
     elif visual_mode == "auto":
-        max_calls = max_visual_files * max_visual_pages_per_file
+        max_calls = estimate_vision_calls(
+            visual_prefilter,
+            max_visual_files,
+            max_visual_pages_per_file,
+            max_clip_pages,
+        )
         st.info(
             "Azure Vision may run only when the query has visual clues. "
             f"If it runs, the current maximum is {max_calls} image-analysis calls."
         )
+
+
+def estimate_vision_calls(
+    visual_prefilter: str,
+    max_visual_files: int,
+    max_visual_pages_per_file: int,
+    max_clip_pages: int,
+) -> int:
+    if visual_prefilter == "clip":
+        return max_clip_pages
+    return max_visual_files * max_visual_pages_per_file
 
 
 def show_agent_steps(response: object) -> None:
