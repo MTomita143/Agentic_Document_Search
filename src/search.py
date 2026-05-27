@@ -23,6 +23,8 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
+from metadata import hydrate_records
+
 
 DEFAULT_INDEX_PATH = Path("indexes/files_index.json")
 DEFAULT_AZURE_OPENAI_API_VERSION = "2024-12-01-preview"
@@ -174,7 +176,7 @@ def load_index(index_path: Path) -> list[dict[str, Any]]:
     if not isinstance(records, list):
         raise ValueError(f"Expected a list of records in {index_path}")
 
-    return records
+    return hydrate_records(records, index_path=index_path)
 
 
 def load_environment() -> None:

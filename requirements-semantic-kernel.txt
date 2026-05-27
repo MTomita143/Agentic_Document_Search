@@ -1,0 +1,2 @@
+-r requirements.txt
+semantic-kernel>=1.30.0

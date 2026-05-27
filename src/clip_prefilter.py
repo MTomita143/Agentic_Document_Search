@@ -21,6 +21,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 
+from document_store import resolve_document_path
 from search import SearchResult
 from visual import choose_pages, render_page_png
 
@@ -180,7 +181,7 @@ def score_pdf_pages(
 
     file_id = str(record.get("file_id"))
     filename = str(record.get("filename"))
-    path = Path(str(record.get("absolute_path")))
+    path = resolve_document_path(record)
     page_matches: list[ClipPageMatch] = []
     cache_hits = 0
 
@@ -299,8 +300,10 @@ def build_clip_cache_key(
     raw_key = json.dumps(
         {
             "file_id": record.get("file_id"),
-            "absolute_path": record.get("absolute_path"),
+            "source": record.get("source"),
+            "uri": record.get("uri") or record.get("relative_path"),
             "file_size_bytes": record.get("file_size_bytes"),
+            "modified_time": record.get("modified_time"),
             "page_number": page_number,
             "model_name": model_name,
             "render_zoom": render_zoom,

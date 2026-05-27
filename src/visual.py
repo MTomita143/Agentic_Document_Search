@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from document_store import resolve_document_path
 from search import SearchResult, has_cjk, normalize_text, tokenize
 
 
@@ -168,7 +169,7 @@ def inspect_pdf_visuals(
         ) from error
 
     file_id = str(record.get("file_id"))
-    path = Path(str(record.get("absolute_path")))
+    path = resolve_document_path(record)
     analyses: list[dict[str, Any]] = []
     azure_calls = 0
     cache_hits = 0
@@ -406,8 +407,10 @@ def build_page_cache_key(
     raw_key = json.dumps(
         {
             "file_id": record.get("file_id"),
-            "absolute_path": record.get("absolute_path"),
+            "source": record.get("source"),
+            "uri": record.get("uri") or record.get("relative_path"),
             "file_size_bytes": record.get("file_size_bytes"),
+            "modified_time": record.get("modified_time"),
             "page_number": page_number,
             "render_zoom": render_zoom,
             "api_version": api_version,

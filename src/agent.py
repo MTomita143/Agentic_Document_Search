@@ -18,6 +18,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from azure_ai_search import (
+    missing_azure_ai_search_config,
+    search_azure_ai_search,
+)
 from clip_prefilter import (
     DEFAULT_CLIP_CACHE_PATH,
     ClipEvidence,
@@ -31,6 +35,7 @@ from content import (
 from search import (
     DEFAULT_INDEX_PATH,
     SearchResult,
+    dedupe,
     load_environment,
     load_index,
     normalize_text,
@@ -39,6 +44,13 @@ from search import (
     serialize_results,
     tokenize,
 )
+from search_memory import (
+    DEFAULT_SEARCH_MEMORY_PATH,
+    apply_memory_evidence,
+    find_memory_candidates,
+    remember_search,
+)
+from semantic_kernel_auto import SearchStrategyPlan, plan_search_strategy
 from translator import QueryTranslation, expand_query_with_translator
 from visual import (
     DEFAULT_VISUAL_CACHE_PATH,
@@ -204,7 +216,26 @@ def run_agent(
     max_clip_pages: int,
     visual_cache_path: Path,
     clip_cache_path: Path,
+    orchestration_mode: str = "manual",
+    azure_ai_search_mode: str = "never",
+    search_memory_path: Path = DEFAULT_SEARCH_MEMORY_PATH,
 ) -> AgentResponse:
+    records = load_index(index_path)
+    steps: list[AgentStep] = []
+
+    if orchestration_mode == "semantic-kernel":
+        strategy_plan = plan_search_strategy(
+            query=query,
+            azure_ai_search_available=not missing_azure_ai_search_config(),
+        )
+        mode = strategy_plan.mode
+        content_mode = strategy_plan.content_mode
+        translator_mode = strategy_plan.translator_mode
+        visual_mode = strategy_plan.visual_mode
+        visual_prefilter = strategy_plan.visual_prefilter
+        azure_ai_search_mode = strategy_plan.azure_ai_search_mode
+        steps.append(make_strategy_step(strategy_plan))
+
     if mode == "llm" and candidate_pool_size < top_k:
         candidate_pool_size = top_k
     if (
@@ -217,8 +248,6 @@ def run_agent(
     search_query = translation.expanded_query
     query_understanding = understand_query(search_query)
     query_understanding.query = query
-    records = load_index(index_path)
-    steps: list[AgentStep] = []
 
     translation_step = make_translation_step(translation, translator_mode)
     if translation_step:
@@ -264,6 +293,37 @@ def run_agent(
                 ),
             )
         )
+
+    memory_candidates = find_memory_candidates(
+        query=search_query,
+        records=records,
+        top_k=max(top_k, candidate_pool_size),
+        cache_path=search_memory_path,
+    )
+    if memory_candidates:
+        results = merge_search_results(results, memory_candidates)
+        evidence_scope = f"{evidence_scope} + search memory"
+        steps.append(make_memory_step(memory_candidates))
+    else:
+        memory_evidence = apply_memory_evidence(
+            query=search_query,
+            results=results,
+            cache_path=search_memory_path,
+        )
+        if memory_evidence:
+            results = sorted(results, key=lambda result: result.score, reverse=True)
+
+    azure_search_results = run_optional_azure_ai_search(
+        query=search_query,
+        records=records,
+        top_k=max(top_k, candidate_pool_size),
+        azure_ai_search_mode=azure_ai_search_mode,
+        steps=steps,
+    )
+    if azure_search_results:
+        results = merge_search_results(results, azure_search_results)
+        results = sorted(results, key=lambda result: result.score, reverse=True)
+        evidence_scope = f"{evidence_scope} + Azure AI Search candidates"
 
     if should_run_content_inspection(query_understanding, results, content_mode):
         if not results:
@@ -336,6 +396,7 @@ def run_agent(
 
     normalize_result_scores(results)
     steps.append(make_answer_step(results))
+    remember_search(query, results, search_memory_path)
 
     return AgentResponse(
         query_understanding=query_understanding,
@@ -387,6 +448,114 @@ def make_translation_step(
         status="not needed",
         detail="No Japanese query expansion was needed for this search.",
     )
+
+
+def make_strategy_step(strategy_plan: SearchStrategyPlan) -> AgentStep:
+    status = "done" if strategy_plan.used_semantic_kernel else "fallback"
+    detail = strategy_plan.rationale
+    if strategy_plan.error:
+        detail += " Semantic Kernel note: " + strategy_plan.error
+    detail += (
+        f" Selected: metadata={strategy_plan.mode}, "
+        f"text={strategy_plan.content_mode}, "
+        f"translator={strategy_plan.translator_mode}, "
+        f"visual={strategy_plan.visual_mode}, "
+        f"CLIP={strategy_plan.visual_prefilter}, "
+        f"Azure AI Search={strategy_plan.azure_ai_search_mode}."
+    )
+    return AgentStep(
+        name="Semantic Kernel Auto Mode",
+        status=status,
+        detail=detail,
+    )
+
+
+def make_memory_step(memory_candidates: list[SearchResult]) -> AgentStep:
+    filenames = [
+        str(result.record.get("filename"))
+        for result in memory_candidates[:3]
+    ]
+    return AgentStep(
+        name="Search Memory",
+        status="done",
+        detail=(
+            "Used previous search sessions as a lightweight memory signal. "
+            "Recalled: " + ", ".join(filenames)
+        ),
+    )
+
+
+def run_optional_azure_ai_search(
+    query: str,
+    records: list[dict[str, Any]],
+    top_k: int,
+    azure_ai_search_mode: str,
+    steps: list[AgentStep],
+) -> list[SearchResult]:
+    if azure_ai_search_mode == "never":
+        return []
+
+    missing = missing_azure_ai_search_config()
+    if missing:
+        steps.append(
+            AgentStep(
+                name="Azure AI Search",
+                status="deferred",
+                detail=(
+                    "Azure AI Search is available as an optional retrieval tool, "
+                    "but it is not configured yet: "
+                    + ", ".join(missing)
+                ),
+            )
+        )
+        return []
+
+    try:
+        results = search_azure_ai_search(query, records, top_k=top_k)
+    except RuntimeError as error:
+        steps.append(
+            AgentStep(
+                name="Azure AI Search",
+                status="deferred",
+                detail=str(error),
+            )
+        )
+        return []
+
+    steps.append(
+        AgentStep(
+            name="Azure AI Search",
+            status="done",
+            detail=(
+                f"Asked Azure AI Search for optional candidates and matched "
+                f"{len(results)} returned documents to the local metadata index."
+            ),
+        )
+    )
+    return results
+
+
+def merge_search_results(
+    left: list[SearchResult],
+    right: list[SearchResult],
+) -> list[SearchResult]:
+    merged: dict[str, SearchResult] = {}
+
+    for result in left + right:
+        file_id = str(result.record.get("file_id"))
+        current = merged.get(file_id)
+        if current is None:
+            merged[file_id] = SearchResult(
+                record=result.record,
+                score=result.score,
+                reasons=list(result.reasons),
+            )
+            continue
+
+        current.score += result.score
+        current.reasons = dedupe(current.reasons + result.reasons)
+
+    return sorted(merged.values(), key=lambda result: result.score, reverse=True)
 
 
 def normalize_result_scores(results: list[SearchResult]) -> None:
@@ -868,6 +1037,18 @@ def main() -> None:
         default="local",
         help="Use local metadata search or Azure OpenAI metadata reranking.",
     )
+    parser.add_argument(
+        "--orchestration-mode",
+        choices=["manual", "semantic-kernel"],
+        default="manual",
+        help="Use fixed settings or Semantic Kernel auto-mode planning.",
+    )
+    parser.add_argument(
+        "--azure-ai-search-mode",
+        choices=["auto", "never"],
+        default="never",
+        help="Use Azure AI Search as an optional candidate retrieval tool.",
+    )
     parser.add_argument("--top-k", type=int, default=3, help="Number of results.")
     parser.add_argument(
         "--candidate-pool-size",
@@ -954,6 +1135,12 @@ def main() -> None:
         help="Path to the generated CLIP embedding cache.",
     )
     parser.add_argument(
+        "--search-memory-cache",
+        type=parse_cache_path,
+        default=DEFAULT_SEARCH_MEMORY_PATH,
+        help="Path to the generated search memory cache.",
+    )
+    parser.add_argument(
         "--json",
         action="store_true",
         help="Print machine-readable JSON output.",
@@ -981,6 +1168,9 @@ def main() -> None:
         max_clip_pages=args.max_clip_pages,
         visual_cache_path=args.visual_cache,
         clip_cache_path=args.clip_cache,
+        orchestration_mode=args.orchestration_mode,
+        azure_ai_search_mode=args.azure_ai_search_mode,
+        search_memory_path=args.search_memory_cache,
     )
 
     if args.json:

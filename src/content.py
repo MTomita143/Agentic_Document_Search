@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from document_store import resolve_document_path
 from search import SearchResult, has_cjk, normalize_text, tokenize
 
 
@@ -119,9 +120,11 @@ def get_or_extract_document_text(
     cached = cache.get(file_id)
     cache_key = {
         "extractor_version": EXTRACTOR_VERSION,
-        "absolute_path": record.get("absolute_path"),
+        "source": record.get("source"),
+        "uri": record.get("uri") or record.get("relative_path"),
         "extension": record.get("extension"),
         "file_size_bytes": record.get("file_size_bytes"),
+        "modified_time": record.get("modified_time"),
         "max_units": max_units,
         "max_chars": max_chars,
         "ocr_min_chars_per_file": get_ocr_min_chars_per_file(),
@@ -181,7 +184,7 @@ def extract_pdf_text(
             "Content inspection needs PyMuPDF. Run: .venv/bin/python -m pip install -r requirements.txt"
         ) from error
 
-    path = Path(str(record.get("absolute_path")))
+    path = resolve_document_path(record)
     pages: list[dict[str, Any]] = []
     total_chars = 0
 
@@ -226,7 +229,7 @@ def extract_pptx_text(
             "PPTX content inspection needs python-pptx. Run: .venv/bin/python -m pip install -r requirements.txt"
         ) from error
 
-    path = Path(str(record.get("absolute_path")))
+    path = resolve_document_path(record)
     presentation = Presentation(path)
     pages: list[dict[str, Any]] = []
     total_chars = 0
@@ -295,7 +298,7 @@ def extract_docx_text(
             "DOCX content inspection needs python-docx. Run: .venv/bin/python -m pip install -r requirements.txt"
         ) from error
 
-    path = Path(str(record.get("absolute_path")))
+    path = resolve_document_path(record)
     document = Document(path)
     parts: list[str] = []
 
@@ -347,7 +350,7 @@ def extract_xlsx_text(
             "XLSX content inspection needs openpyxl. Run: .venv/bin/python -m pip install -r requirements.txt"
         ) from error
 
-    path = Path(str(record.get("absolute_path")))
+    path = resolve_document_path(record)
     workbook = load_workbook(path, read_only=True, data_only=False)
     pages: list[dict[str, Any]] = []
     total_chars = 0
@@ -507,7 +510,7 @@ def ocr_pdf_pages(
             "PDF OCR fallback needs PyMuPDF. Run: .venv/bin/python -m pip install -r requirements.txt"
         ) from error
 
-    path = Path(str(record.get("absolute_path")))
+    path = resolve_document_path(record)
     languages = get_ocr_languages()
     pages: list[dict[str, Any]] = []
     errors: list[str] = []

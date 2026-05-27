@@ -12,6 +12,7 @@ data/raw/*
 # Generated indexes
 indexes/*.json
 indexes/model_cache/
+indexes/blob_cache/
 
 # OS
 .DS_Store

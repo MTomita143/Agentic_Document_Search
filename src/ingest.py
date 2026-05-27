@@ -1,19 +1,17 @@
 """
 Build a lightweight file-level metadata index.
 
+The saved index is intentionally small and portable. Richer fields such as
+filename, extension, parent folder, display size, and local absolute path are
+derived when the app loads the index.
+
 ```json
 {
   "file_id": "file_xxxxx",
-  "filename": "Q4_Revenue_Update.pptx",
-  "title": "Q4_Revenue_Update",
-  "extension": ".pptx",
-  "relative_path": "CompanyA/Reports/Q4_Revenue_Update.pptx",
-  "file_size_bytes": 1234567,
-  "file_size_label": "1.2 MB",
-  "parent_folder": "Reports",
-  "grandparent_folder": "CompanyA",
-  "folder_path": "CompanyA/Reports",
-  "type_label": "slide"
+  "source": "local",
+  "uri": "CompanyA/Reports/Q4_Revenue_Update.pptx",
+  "size_bytes": 1234567,
+  "modified_time": "2026-05-27T12:00:00+00:00"
 }
 ```
 
@@ -24,10 +22,15 @@ Usage:
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any
+import urllib.parse
+import urllib.request
+import xml.etree.ElementTree as ET
 
 
 SUPPORTED_EXTENSIONS = {
@@ -48,30 +51,6 @@ def make_file_id(relative_path: str) -> str:
     return f"file_{digest[:10]}"
 
 
-def get_parent_parts(relative_path: Path) -> dict[str, str | None]:
-    """
-    Extract folder information.
-
-    Example:
-        company_a/reports/Q4_Revenue_Update.pptx
-
-    parent_folder      -> reports
-    grandparent_folder -> company_a
-    folder_path        -> company_a/reports
-    """
-    parents = relative_path.parts[:-1]
-
-    parent_folder = parents[-1] if len(parents) >= 1 else None
-    grandparent_folder = parents[-2] if len(parents) >= 2 else None
-    folder_path = str(Path(*parents)) if parents else ""
-
-    return {
-        "parent_folder": parent_folder,
-        "grandparent_folder": grandparent_folder,
-        "folder_path": folder_path,
-    }
-
-
 def collect_file_metadata(data_dir: Path) -> list[dict[str, Any]]:
     """Scan files under data_dir and collect lightweight metadata."""
     records: list[dict[str, Any]] = []
@@ -86,22 +65,17 @@ def collect_file_metadata(data_dir: Path) -> list[dict[str, Any]]:
 
         relative_path = path.relative_to(data_dir)
         relative_path_str = relative_path.as_posix()
-        folder_info = get_parent_parts(relative_path)
-        file_size_bytes = path.stat().st_size
+        stat = path.stat()
 
         record = {
             "file_id": make_file_id(relative_path_str),
-            "filename": path.name,
-            "title": path.stem,
-            "extension": extension,
-            "relative_path": relative_path_str,
-            "absolute_path": str(path.resolve()),
-            "file_size_bytes": file_size_bytes,
-            "file_size_label": format_file_size(file_size_bytes),
-            "parent_folder": folder_info["parent_folder"],
-            "grandparent_folder": folder_info["grandparent_folder"],
-            "folder_path": folder_info["folder_path"],
-            "type_label": infer_type_label(extension),
+            "source": "local",
+            "uri": relative_path_str,
+            "size_bytes": stat.st_size,
+            "modified_time": datetime.fromtimestamp(
+                stat.st_mtime,
+                timezone.utc,
+            ).isoformat(),
         }
 
         records.append(record)
@@ -109,32 +83,46 @@ def collect_file_metadata(data_dir: Path) -> list[dict[str, Any]]:
     return records
 
 
-def infer_type_label(extension: str) -> str:
-    """Infer a simple non-LLM type label from extension."""
-    if extension in {".ppt", ".pptx"}:
-        return "slide"
-    if extension == ".pdf":
-        return "pdf"
-    if extension in {".doc", ".docx"}:
-        return "document"
-    if extension in {".xlsx", ".xlsm", ".xls"}:
-        return "spreadsheet"
-    return "unknown"
+def collect_azure_blob_metadata(container_url: str) -> list[dict[str, Any]]:
+    """List supported blobs from an Azure Blob container URL with read/list access."""
+    listing_url = build_blob_listing_url(container_url)
+    with urllib.request.urlopen(listing_url, timeout=60) as response:
+        body = response.read()
+
+    root = ET.fromstring(body)
+    records: list[dict[str, Any]] = []
+
+    for blob in root.findall(".//Blob"):
+        name = blob.findtext("Name") or ""
+        extension = Path(name).suffix.lower()
+        if extension not in SUPPORTED_EXTENSIONS:
+            continue
+
+        properties = blob.find("Properties")
+        size_text = properties.findtext("Content-Length") if properties is not None else "0"
+        modified_time = properties.findtext("Last-Modified") if properties is not None else None
+
+        records.append(
+            {
+                "file_id": make_file_id(name),
+                "source": "azure_blob",
+                "uri": name,
+                "size_bytes": int(size_text or 0),
+                "modified_time": modified_time,
+            }
+        )
+
+    return records
 
 
-def format_file_size(size_bytes: int) -> str:
-    """Format a byte count as a compact human-readable size."""
-    units = ["B", "KB", "MB", "GB"]
-    size = float(size_bytes)
-
-    for unit in units:
-        if size < 1024 or unit == units[-1]:
-            if unit == "B":
-                return f"{int(size)} {unit}"
-            return f"{size:.1f} {unit}"
-        size /= 1024
-
-    return f"{size_bytes} B"
+def build_blob_listing_url(container_url: str) -> str:
+    parsed = urllib.parse.urlsplit(container_url)
+    query_items = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    query_items.extend([("restype", "container"), ("comp", "list")])
+    query = urllib.parse.urlencode(query_items)
+    return urllib.parse.urlunsplit(
+        (parsed.scheme, parsed.netloc, parsed.path, query, parsed.fragment)
+    )
 
 
 def save_json(records: list[dict[str, Any]], output_path: Path) -> None:
@@ -150,10 +138,21 @@ def main() -> None:
         description="Create a lightweight file metadata index."
     )
     parser.add_argument(
+        "--source",
+        choices=["local", "azure-blob"],
+        default="local",
+        help="Where to scan documents from.",
+    )
+    parser.add_argument(
         "--data-dir",
         type=Path,
         default=Path("data/raw"),
         help="Directory containing source documents.",
+    )
+    parser.add_argument(
+        "--blob-container-url",
+        default=os.getenv("AZURE_BLOB_CONTAINER_URL", ""),
+        help="Azure Blob container URL with SAS when --source azure-blob is used.",
     )
     parser.add_argument(
         "--output",
@@ -164,10 +163,14 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    if not args.data_dir.exists():
-        raise FileNotFoundError(f"Data directory does not exist: {args.data_dir}")
-
-    records = collect_file_metadata(args.data_dir)
+    if args.source == "local":
+        if not args.data_dir.exists():
+            raise FileNotFoundError(f"Data directory does not exist: {args.data_dir}")
+        records = collect_file_metadata(args.data_dir)
+    else:
+        if not args.blob_container_url:
+            raise ValueError("--source azure-blob needs --blob-container-url")
+        records = collect_azure_blob_metadata(args.blob_container_url)
     save_json(records, args.output)
 
     print(f"Indexed {len(records)} files")

@@ -36,7 +36,7 @@ def main() -> None:
 
         search_mode = st.radio(
             "Search mode",
-            options=["instant", "reasoning", "visual"],
+            options=["instant", "reasoning", "visual", "auto"],
             format_func=format_search_mode,
             index=0,
             help="Choose how much the agent should inspect before answering.",
@@ -45,6 +45,10 @@ def main() -> None:
         st.caption(mode_summary(search_mode))
 
         with st.expander("⚙️ Customize mode"):
+            if search_mode == "auto":
+                st.caption(
+                    "🧭 Auto mode lets Semantic Kernel choose these settings at run time."
+                )
             use_llm = st.toggle(
                 "🧠 Azure OpenAI rerank",
                 value=settings["mode"] == "llm",
@@ -62,6 +66,12 @@ def main() -> None:
                 value=settings["translator_mode"] == "auto",
                 key=f"{search_mode}_use_translator",
                 help="Expands Japanese queries into English for mixed-language search.",
+            )
+            use_azure_ai_search = st.toggle(
+                "🔎 Azure AI Search",
+                value=settings["azure_ai_search_mode"] == "auto",
+                key=f"{search_mode}_use_azure_ai_search",
+                help="Uses Azure AI Search as an optional retrieval tool.",
             )
             use_clip = st.toggle(
                 "📎 CLIP prefilter",
@@ -155,12 +165,18 @@ def main() -> None:
         mode = "llm" if use_llm else "local"
         content_mode = "auto" if use_text else "never"
         translator_mode = "auto" if use_translator else "never"
+        azure_ai_search_mode = "auto" if use_azure_ai_search else "never"
         visual_prefilter = "clip" if use_clip else "none"
         visual_mode = "azure" if use_vision else "never"
+        orchestration_mode = (
+            "semantic-kernel" if search_mode == "auto" else "manual"
+        )
 
     show_cost_notice(
+        orchestration_mode,
         mode,
         translator_mode,
+        azure_ai_search_mode,
         visual_mode,
         visual_prefilter,
         max_visual_files,
@@ -183,6 +199,7 @@ def main() -> None:
     content_cache_path = PROJECT_ROOT / "indexes/content_cache.json"
     visual_cache_path = PROJECT_ROOT / "indexes/visual_cache.json"
     clip_cache_path = PROJECT_ROOT / "indexes/clip_visual_cache.json"
+    search_memory_path = PROJECT_ROOT / "indexes/search_memory.json"
 
     with st.spinner("Running agentic search..."):
         try:
@@ -205,6 +222,9 @@ def main() -> None:
                 max_clip_pages=max_clip_pages,
                 visual_cache_path=visual_cache_path,
                 clip_cache_path=clip_cache_path,
+                orchestration_mode=orchestration_mode,
+                azure_ai_search_mode=azure_ai_search_mode,
+                search_memory_path=search_memory_path,
             )
         except Exception as error:
             st.error(str(error))
@@ -227,6 +247,7 @@ def format_search_mode(value: str) -> str:
         "instant": "⚡ Instant",
         "reasoning": "🧠 Reasoning",
         "visual": "👁️ Visual",
+        "auto": "🧭 Auto",
     }[value]
 
 
@@ -235,6 +256,7 @@ def mode_summary(value: str) -> str:
         "instant": "Metadata plus local text inspection. No Azure AI calls.",
         "reasoning": "Instant search plus Azure OpenAI reranking.",
         "visual": "Reasoning search plus CLIP prefilter and Azure visual inspection.",
+        "auto": "Semantic Kernel chooses the search strategy.",
     }[value]
 
 
@@ -244,6 +266,7 @@ def preset_settings(value: str) -> dict[str, object]:
             "mode": "local",
             "content_mode": "auto",
             "translator_mode": "never",
+            "azure_ai_search_mode": "never",
             "visual_mode": "never",
             "visual_prefilter": "none",
             "candidate_pool_size": 6,
@@ -257,6 +280,7 @@ def preset_settings(value: str) -> dict[str, object]:
             "mode": "llm",
             "content_mode": "auto",
             "translator_mode": "auto",
+            "azure_ai_search_mode": "never",
             "visual_mode": "never",
             "visual_prefilter": "none",
             "candidate_pool_size": 6,
@@ -270,8 +294,23 @@ def preset_settings(value: str) -> dict[str, object]:
             "mode": "llm",
             "content_mode": "auto",
             "translator_mode": "auto",
+            "azure_ai_search_mode": "never",
             "visual_mode": "azure",
             "visual_prefilter": "clip",
+            "candidate_pool_size": 6,
+            "max_inspected_files": 6,
+            "max_pages_per_file": 50,
+            "max_visual_files": 3,
+            "max_visual_pages_per_file": 5,
+            "max_clip_pages": 10,
+        },
+        "auto": {
+            "mode": "local",
+            "content_mode": "auto",
+            "translator_mode": "auto",
+            "azure_ai_search_mode": "auto",
+            "visual_mode": "never",
+            "visual_prefilter": "none",
             "candidate_pool_size": 6,
             "max_inspected_files": 6,
             "max_pages_per_file": 50,
@@ -300,19 +339,27 @@ def show_empty_state() -> None:
 
 
 def show_cost_notice(
+    orchestration_mode: str,
     mode: str,
     translator_mode: str,
+    azure_ai_search_mode: str,
     visual_mode: str,
     visual_prefilter: str,
     max_visual_files: int,
     max_visual_pages_per_file: int,
     max_clip_pages: int,
 ) -> None:
+    if orchestration_mode == "semantic-kernel":
+        st.warning("Semantic Kernel auto mode may use Azure OpenAI to choose a search strategy.")
+
     if mode == "llm":
         st.warning("Azure OpenAI reranking is enabled. This may use paid tokens.")
 
     if translator_mode == "auto":
         st.info("Azure Translator query expansion is enabled for Japanese prompts.")
+
+    if azure_ai_search_mode == "auto":
+        st.info("Azure AI Search may be used as an optional retrieval tool.")
 
     if visual_prefilter == "clip":
         st.info(
