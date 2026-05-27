@@ -62,12 +62,13 @@ The UI offers three search modes:
 
 ```text
 ⚡ Instant   metadata + local text inspection
-🧠 Reasoning instant search + Azure OpenAI reranking
+🧠 Reasoning instant search + Azure Translator query expansion + Azure OpenAI reranking
 👁️ Visual    reasoning search + CLIP prefilter + Azure visual inspection
 ```
 
-Open `⚙️ Customize mode` in the sidebar to override text inspection, LLM usage,
-📎 CLIP prefiltering, Azure visual inspection, and 🛠️ inspection limits.
+Open `⚙️ Customize mode` in the sidebar to override text inspection, Azure
+Translator, LLM usage, 📎 CLIP prefiltering, Azure visual inspection, and 🛠️
+inspection limits.
 The app automatically adjusts dependent limits: Azure OpenAI candidate pool is
 kept at least as large as requested results, and 📎 CLIP page selection is kept
 large enough to cover the Azure visual inspection budget.
@@ -86,6 +87,7 @@ The agent flow currently shows:
 ```text
 understand query
 → search English/Japanese/mixed metadata
+→ optionally expand Japanese queries with Azure Translator
 → inspect extracted English/Japanese/mixed text from top candidate documents when useful
 → use local OCR fallback for scanned PDF pages when extracted text is too thin
 → optionally prefilter rendered visual pages locally with CLIP
@@ -129,6 +131,11 @@ AZURE_VISION_ENDPOINT="https://YOUR-VISION-RESOURCE.cognitiveservices.azure.com/
 AZURE_VISION_KEY="YOUR-VISION-KEY"
 AZURE_VISION_API_VERSION="2024-02-01"
 AZURE_VISION_FEATURES="caption,denseCaptions,tags,read,objects"
+
+AZURE_TRANSLATOR_ENDPOINT="https://api.cognitive.microsofttranslator.com"
+AZURE_TRANSLATOR_KEY="YOUR-TRANSLATOR-KEY"
+AZURE_TRANSLATOR_REGION="YOUR-TRANSLATOR-REGION"
+AZURE_TRANSLATOR_API_VERSION="3.0"
 
 ADS_CLIP_MODEL_CACHE_DIR="indexes/model_cache/huggingface"
 ```

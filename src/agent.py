@@ -39,6 +39,7 @@ from search import (
     serialize_results,
     tokenize,
 )
+from translator import QueryTranslation, expand_query_with_translator
 from visual import (
     DEFAULT_VISUAL_CACHE_PATH,
     VisualEvidence,
@@ -191,6 +192,7 @@ def run_agent(
     top_k: int,
     candidate_pool_size: int,
     content_mode: str,
+    translator_mode: str,
     max_inspected_files: int,
     max_pages_per_file: int,
     max_chars_per_file: int,
@@ -211,9 +213,16 @@ def run_agent(
     ):
         max_clip_pages = max_visual_files * max_visual_pages_per_file
 
-    query_understanding = understand_query(query)
+    translation = prepare_query_translation(query, translator_mode)
+    search_query = translation.expanded_query
+    query_understanding = understand_query(search_query)
+    query_understanding.query = query
     records = load_index(index_path)
     steps: list[AgentStep] = []
+
+    translation_step = make_translation_step(translation, translator_mode)
+    if translation_step:
+        steps.append(translation_step)
 
     steps.append(
         AgentStep(
@@ -224,7 +233,7 @@ def run_agent(
     )
 
     if mode == "local":
-        results = search_local(query, records, top_k=top_k)
+        results = search_local(search_query, records, top_k=top_k)
         evidence_scope = "metadata only"
         steps.append(
             AgentStep(
@@ -238,7 +247,7 @@ def run_agent(
         )
     else:
         results = search_llm(
-            query,
+            search_query,
             records,
             top_k=top_k,
             candidate_pool_size=candidate_pool_size,
@@ -259,13 +268,13 @@ def run_agent(
     if should_run_content_inspection(query_understanding, results, content_mode):
         if not results:
             results = search_local(
-                query,
+                search_query,
                 records,
                 top_k=max_inspected_files,
                 include_zero_scores=True,
             )
         content_evidence = inspect_content_for_results(
-            query=query,
+            query=search_query,
             results=results,
             max_files=max_inspected_files,
             max_pages_per_file=max_pages_per_file,
@@ -285,7 +294,7 @@ def run_agent(
     if should_run_clip_prefilter(query_understanding, results, visual_prefilter):
         try:
             clip_evidence, selected_visual_pages = rank_visual_pages_with_clip(
-                query=query,
+                query=search_query,
                 results=results,
                 max_files=max_visual_files,
                 max_pages_per_file=max_visual_pages_per_file,
@@ -311,7 +320,7 @@ def run_agent(
                 steps.append(make_visual_missing_config_step(missing_visual_config))
             else:
                 visual_evidence = inspect_visuals_for_results(
-                    query=query,
+                    query=search_query,
                     results=results,
                     max_files=max_visual_files,
                     max_pages_per_file=max_visual_pages_per_file,
@@ -333,6 +342,50 @@ def run_agent(
         steps=steps,
         results=results,
         evidence_scope=evidence_scope,
+    )
+
+
+def prepare_query_translation(query: str, translator_mode: str) -> QueryTranslation:
+    if translator_mode == "never":
+        return QueryTranslation(
+            original_query=query,
+            expanded_query=query,
+            translated_query=None,
+            detected_language=None,
+            used=False,
+        )
+
+    return expand_query_with_translator(query)
+
+
+def make_translation_step(
+    translation: QueryTranslation,
+    translator_mode: str,
+) -> AgentStep | None:
+    if translator_mode == "never":
+        return None
+
+    if translation.used:
+        detail = f"Expanded the query with Azure Translator: {translation.translated_query}"
+        if translation.detected_language:
+            detail += f" (detected {translation.detected_language})"
+        return AgentStep(
+            name="Translate Query",
+            status="done",
+            detail=detail,
+        )
+
+    if translation.error:
+        return AgentStep(
+            name="Translate Query",
+            status="deferred",
+            detail=translation.error,
+        )
+
+    return AgentStep(
+        name="Translate Query",
+        status="not needed",
+        detail="No Japanese query expansion was needed for this search.",
     )
 
 
@@ -829,6 +882,12 @@ def main() -> None:
         help="When to inspect extracted text from candidate files.",
     )
     parser.add_argument(
+        "--translator-mode",
+        choices=["auto", "never"],
+        default="never",
+        help="Use Azure Translator to expand Japanese queries into English.",
+    )
+    parser.add_argument(
         "--max-inspected-files",
         type=parse_positive_int,
         default=6,
@@ -910,6 +969,7 @@ def main() -> None:
         top_k=args.top_k,
         candidate_pool_size=args.candidate_pool_size,
         content_mode=args.content_mode,
+        translator_mode=args.translator_mode,
         max_inspected_files=args.max_inspected_files,
         max_pages_per_file=args.max_pages_per_file,
         max_chars_per_file=args.max_chars_per_file,

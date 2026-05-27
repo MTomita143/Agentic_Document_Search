@@ -57,6 +57,12 @@ def main() -> None:
                 key=f"{search_mode}_use_text",
                 help="Inspects extracted text from top candidate files.",
             )
+            use_translator = st.toggle(
+                "🌐 Azure Translator",
+                value=settings["translator_mode"] == "auto",
+                key=f"{search_mode}_use_translator",
+                help="Expands Japanese queries into English for mixed-language search.",
+            )
             use_clip = st.toggle(
                 "📎 CLIP prefilter",
                 value=settings["visual_prefilter"] == "clip",
@@ -148,11 +154,13 @@ def main() -> None:
 
         mode = "llm" if use_llm else "local"
         content_mode = "auto" if use_text else "never"
+        translator_mode = "auto" if use_translator else "never"
         visual_prefilter = "clip" if use_clip else "none"
         visual_mode = "azure" if use_vision else "never"
 
     show_cost_notice(
         mode,
+        translator_mode,
         visual_mode,
         visual_prefilter,
         max_visual_files,
@@ -185,6 +193,7 @@ def main() -> None:
                 top_k=top_k,
                 candidate_pool_size=candidate_pool_size,
                 content_mode=content_mode,
+                translator_mode=translator_mode,
                 max_inspected_files=max_inspected_files,
                 max_pages_per_file=max_pages_per_file,
                 max_chars_per_file=30000,
@@ -234,6 +243,7 @@ def preset_settings(value: str) -> dict[str, object]:
         "instant": {
             "mode": "local",
             "content_mode": "auto",
+            "translator_mode": "never",
             "visual_mode": "never",
             "visual_prefilter": "none",
             "candidate_pool_size": 6,
@@ -246,6 +256,7 @@ def preset_settings(value: str) -> dict[str, object]:
         "reasoning": {
             "mode": "llm",
             "content_mode": "auto",
+            "translator_mode": "auto",
             "visual_mode": "never",
             "visual_prefilter": "none",
             "candidate_pool_size": 6,
@@ -258,6 +269,7 @@ def preset_settings(value: str) -> dict[str, object]:
         "visual": {
             "mode": "llm",
             "content_mode": "auto",
+            "translator_mode": "auto",
             "visual_mode": "azure",
             "visual_prefilter": "clip",
             "candidate_pool_size": 6,
@@ -289,6 +301,7 @@ def show_empty_state() -> None:
 
 def show_cost_notice(
     mode: str,
+    translator_mode: str,
     visual_mode: str,
     visual_prefilter: str,
     max_visual_files: int,
@@ -297,6 +310,9 @@ def show_cost_notice(
 ) -> None:
     if mode == "llm":
         st.warning("Azure OpenAI reranking is enabled. This may use paid tokens.")
+
+    if translator_mode == "auto":
+        st.info("Azure Translator query expansion is enabled for Japanese prompts.")
 
     if visual_prefilter == "clip":
         st.info(
