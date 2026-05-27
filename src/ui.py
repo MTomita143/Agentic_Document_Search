@@ -34,52 +34,122 @@ def main() -> None:
     with st.sidebar:
         st.header("Search Settings")
 
-        mode = st.radio(
-            "Metadata ranking",
-            options=["local", "llm"],
-            format_func=lambda value: {
-                "local": "Local metadata search",
-                "llm": "Azure OpenAI rerank",
-            }[value],
-            help="Azure OpenAI uses your Foundry deployment and may cost money.",
-        )
-
-        content_mode = st.selectbox(
-            "Text inspection",
-            options=["auto", "always", "never"],
+        search_mode = st.radio(
+            "Search mode",
+            options=["instant", "reasoning", "visual"],
+            format_func=format_search_mode,
             index=0,
-            help="Inspects extracted text from top candidate files only. Scanned PDFs can use local OCR fallback.",
+            help="Choose how much the agent should inspect before answering.",
         )
+        settings = preset_settings(search_mode)
+        st.caption(mode_summary(search_mode))
 
-        visual_mode = st.selectbox(
-            "Visual inspection",
-            options=["auto", "azure", "never"],
-            index=0,
-            help="Azure Vision sends rendered PDF pages to Azure AI Vision and may cost money.",
-        )
+        with st.expander("⚙️ Customize mode"):
+            use_llm = st.toggle(
+                "🧠 Azure OpenAI rerank",
+                value=settings["mode"] == "llm",
+                key=f"{search_mode}_use_llm",
+                help="Uses your Foundry/Azure OpenAI deployment and may cost money.",
+            )
+            use_text = st.toggle(
+                "📄 Text inspection",
+                value=settings["content_mode"] != "never",
+                key=f"{search_mode}_use_text",
+                help="Inspects extracted text from top candidate files.",
+            )
+            use_clip = st.toggle(
+                "📎 CLIP prefilter",
+                value=settings["visual_prefilter"] == "clip",
+                key=f"{search_mode}_use_clip",
+                help="Ranks rendered pages locally with CLIP before visual verification.",
+            )
+            use_vision = st.toggle(
+                "👁️ Azure visual inspection",
+                value=settings["visual_mode"] == "azure",
+                key=f"{search_mode}_use_vision",
+                help="Sends selected rendered pages to Azure AI Vision and may cost money.",
+            )
 
-        visual_prefilter = st.selectbox(
-            "Visual prefilter",
-            options=["clip", "none"],
-            index=0,
-            help="CLIP ranks rendered pages locally before Azure Vision verifies them.",
-        )
+            st.divider()
+            st.caption("🛠️ Limits")
+            top_k = st.slider(
+                "Results",
+                min_value=1,
+                max_value=6,
+                value=3,
+                key=f"{search_mode}_top_k",
+            )
+            candidate_pool_size = st.slider(
+                "LLM candidate pool",
+                min_value=1,
+                max_value=20,
+                value=settings["candidate_pool_size"],
+                key=f"{search_mode}_candidate_pool_size",
+                help="Only used for Azure OpenAI reranking.",
+            )
+            if use_llm and candidate_pool_size < top_k:
+                candidate_pool_size = top_k
+                st.caption(
+                    f"🧠 LLM candidate pool adjusted to {candidate_pool_size} "
+                    "so it can return the requested number of results."
+                )
+            max_inspected_files = st.slider(
+                "Text files to inspect",
+                1,
+                10,
+                settings["max_inspected_files"],
+                key=f"{search_mode}_max_inspected_files",
+            )
+            max_pages_per_file = st.slider(
+                "Text pages per file",
+                1,
+                200,
+                settings["max_pages_per_file"],
+                key=f"{search_mode}_max_pages_per_file",
+            )
+            max_visual_files = st.slider(
+                "Visual files to inspect",
+                1,
+                6,
+                settings["max_visual_files"],
+                key=f"{search_mode}_max_visual_files",
+            )
+            max_visual_pages_per_file = st.slider(
+                "Visual pages per file",
+                1,
+                24,
+                settings["max_visual_pages_per_file"],
+                key=f"{search_mode}_max_visual_pages_per_file",
+            )
+            max_clip_pages = st.slider(
+                "CLIP pages for Vision",
+                1,
+                60,
+                settings["max_clip_pages"],
+                key=f"{search_mode}_max_clip_pages",
+            )
+            if use_clip:
+                requested_clip_pages = max_clip_pages
+                minimum_clip_pages = (
+                    max_visual_files * max_visual_pages_per_file
+                    if use_vision
+                    else max_visual_pages_per_file
+                )
+                max_clip_pages = max(max_clip_pages, minimum_clip_pages)
+                st.caption(
+                    f"📎 CLIP will select up to {max_clip_pages} pages; "
+                    f"Azure Vision will inspect at most {max_visual_pages_per_file} per file."
+                )
+                if max_clip_pages != requested_clip_pages:
+                    st.caption(
+                        "📎 CLIP page count was auto-adjusted so the visual "
+                        "inspection budget does not exceed the CLIP funnel."
+                    )
 
-        st.divider()
-        st.header("Limits")
-        top_k = st.slider("Results", min_value=1, max_value=6, value=3)
-        candidate_pool_size = st.slider(
-            "LLM candidate pool",
-            min_value=1,
-            max_value=10,
-            value=6,
-            help="Only used for Azure OpenAI reranking.",
-        )
-        max_inspected_files = st.slider("Text files to inspect", 1, 6, 3)
-        max_pages_per_file = st.slider("Text pages per file", 1, 40, 20)
-        max_visual_files = st.slider("Visual files to inspect", 1, 4, 2)
-        max_visual_pages_per_file = st.slider("Visual pages per file", 1, 6, 3)
-        max_clip_pages = st.slider("CLIP pages for Vision", 1, 8, 3)
+        mode = "llm" if use_llm else "local"
+        content_mode = "auto" if use_text else "never"
+        visual_prefilter = "clip" if use_clip else "none"
+        visual_mode = "azure" if use_vision else "never"
 
     show_cost_notice(
         mode,
@@ -141,6 +211,64 @@ def configure_page() -> None:
         page_icon="🔎",
         layout="wide",
     )
+
+
+def format_search_mode(value: str) -> str:
+    return {
+        "instant": "⚡ Instant",
+        "reasoning": "🧠 Reasoning",
+        "visual": "👁️ Visual",
+    }[value]
+
+
+def mode_summary(value: str) -> str:
+    return {
+        "instant": "Metadata plus local text inspection. No Azure AI calls.",
+        "reasoning": "Instant search plus Azure OpenAI reranking.",
+        "visual": "Reasoning search plus CLIP prefilter and Azure visual inspection.",
+    }[value]
+
+
+def preset_settings(value: str) -> dict[str, object]:
+    presets = {
+        "instant": {
+            "mode": "local",
+            "content_mode": "auto",
+            "visual_mode": "never",
+            "visual_prefilter": "none",
+            "candidate_pool_size": 6,
+            "max_inspected_files": 6,
+            "max_pages_per_file": 50,
+            "max_visual_files": 3,
+            "max_visual_pages_per_file": 5,
+            "max_clip_pages": 10,
+        },
+        "reasoning": {
+            "mode": "llm",
+            "content_mode": "auto",
+            "visual_mode": "never",
+            "visual_prefilter": "none",
+            "candidate_pool_size": 6,
+            "max_inspected_files": 6,
+            "max_pages_per_file": 50,
+            "max_visual_files": 3,
+            "max_visual_pages_per_file": 5,
+            "max_clip_pages": 10,
+        },
+        "visual": {
+            "mode": "llm",
+            "content_mode": "auto",
+            "visual_mode": "azure",
+            "visual_prefilter": "clip",
+            "candidate_pool_size": 6,
+            "max_inspected_files": 6,
+            "max_pages_per_file": 50,
+            "max_visual_files": 3,
+            "max_visual_pages_per_file": 5,
+            "max_clip_pages": 10,
+        },
+    }
+    return presets[value]
 
 
 def show_empty_state() -> None:

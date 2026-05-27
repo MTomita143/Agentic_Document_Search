@@ -203,6 +203,14 @@ def run_agent(
     visual_cache_path: Path,
     clip_cache_path: Path,
 ) -> AgentResponse:
+    if mode == "llm" and candidate_pool_size < top_k:
+        candidate_pool_size = top_k
+    if (
+        visual_prefilter == "clip"
+        and max_clip_pages < max_visual_files * max_visual_pages_per_file
+    ):
+        max_clip_pages = max_visual_files * max_visual_pages_per_file
+
     query_understanding = understand_query(query)
     records = load_index(index_path)
     steps: list[AgentStep] = []
@@ -317,6 +325,7 @@ def run_agent(
     elif query_understanding.should_inspect_visuals:
         steps.append(make_visual_skipped_step(visual_mode))
 
+    normalize_result_scores(results)
     steps.append(make_answer_step(results))
 
     return AgentResponse(
@@ -325,6 +334,20 @@ def run_agent(
         results=results,
         evidence_scope=evidence_scope,
     )
+
+
+def normalize_result_scores(results: list[SearchResult]) -> None:
+    if not results:
+        return
+
+    max_score = max(result.score for result in results)
+    if max_score <= 0:
+        for result in results:
+            result.score = 0.0
+        return
+
+    for result in results:
+        result.score = round(max(0.0, min(100.0, result.score / max_score * 100)), 1)
 
 
 def format_understanding_detail(understanding: QueryUnderstanding) -> str:
@@ -592,9 +615,6 @@ def apply_content_evidence(
             continue
 
         if evidence.score <= 0:
-            result.reasons.append(
-                f"inspected {evidence.inspected_pages} content units; no query terms matched"
-            )
             if evidence.ocr_used:
                 result.reasons.append(
                     f"local OCR fallback added text from {evidence.ocr_pages} pages"
@@ -603,18 +623,32 @@ def apply_content_evidence(
                 result.reasons.append("local OCR fallback note: " + evidence.ocr_error)
             continue
 
-        result.score += evidence.score
-        result.reasons.append(
-            "content text matched terms: " + ", ".join(evidence.matched_terms)
-        )
+        meaningful_terms = evidence.matched_terms
+        if meaningful_terms:
+            result.score += evidence.score
+            result.reasons.append(
+                "content text matched: " + ", ".join(meaningful_terms)
+            )
         if evidence.ocr_used:
             result.reasons.append(
                 f"local OCR fallback added text from {evidence.ocr_pages} pages"
             )
         elif evidence.ocr_error:
             result.reasons.append("local OCR fallback note: " + evidence.ocr_error)
-        for snippet in evidence.snippets:
+        for snippet in filter_snippets_for_terms(evidence.snippets, meaningful_terms):
             result.reasons.append("content snippet " + snippet)
+
+
+def filter_snippets_for_terms(snippets: list[str], terms: list[str]) -> list[str]:
+    if not terms:
+        return []
+
+    normalized_terms = [term.lower() for term in terms]
+    return [
+        snippet
+        for snippet in snippets
+        if any(term in snippet.lower() for term in normalized_terms)
+    ]
 
 
 def apply_clip_evidence(
@@ -797,13 +831,13 @@ def main() -> None:
     parser.add_argument(
         "--max-inspected-files",
         type=parse_positive_int,
-        default=3,
+        default=6,
         help="Maximum number of candidate files to open for content inspection.",
     )
     parser.add_argument(
         "--max-pages-per-file",
         type=parse_positive_int,
-        default=20,
+        default=50,
         help="Maximum pages/slides/chunks/sheets to extract per inspected file.",
     )
     parser.add_argument(
@@ -821,31 +855,31 @@ def main() -> None:
     parser.add_argument(
         "--visual-mode",
         choices=["auto", "azure", "never"],
-        default="auto",
+        default="never",
         help="When to analyze rendered candidate pages with Azure Vision.",
     )
     parser.add_argument(
         "--visual-prefilter",
         choices=["clip", "none"],
-        default="clip",
+        default="none",
         help="Use local CLIP to select visual pages before Azure Vision.",
     )
     parser.add_argument(
         "--max-visual-files",
         type=parse_positive_int,
-        default=2,
+        default=3,
         help="Maximum number of candidate files to send to Azure Vision.",
     )
     parser.add_argument(
         "--max-visual-pages-per-file",
         type=parse_positive_int,
-        default=3,
+        default=5,
         help="Maximum rendered pages per file to send to Azure Vision.",
     )
     parser.add_argument(
         "--max-clip-pages",
         type=parse_positive_int,
-        default=3,
+        default=10,
         help="Maximum CLIP-selected pages to send to Azure Vision.",
     )
     parser.add_argument(

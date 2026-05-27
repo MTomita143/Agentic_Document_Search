@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -26,6 +27,7 @@ from visual import choose_pages, render_page_png
 
 DEFAULT_CLIP_CACHE_PATH = Path("indexes/clip_visual_cache.json")
 DEFAULT_CLIP_MODEL_NAME = "clip-ViT-B-32"
+DEFAULT_CLIP_MODEL_CACHE_DIR = Path("indexes/model_cache/huggingface")
 
 
 @dataclass
@@ -223,6 +225,20 @@ def score_pdf_pages(
 
 
 def load_clip_runtime(model_name: str) -> tuple[Any, Any]:
+    model_cache_dir = get_clip_model_cache_dir()
+    try:
+        model_cache_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        raise RuntimeError(
+            "CLIP could not create its local model cache directory. "
+            f"The current cache directory is {model_cache_dir}. "
+            "Set ADS_CLIP_MODEL_CACHE_DIR to a writable project path."
+        ) from error
+
+    os.environ.setdefault("HF_HOME", str(model_cache_dir))
+    os.environ.setdefault("SENTENCE_TRANSFORMERS_HOME", str(model_cache_dir))
+    os.environ.setdefault("TRANSFORMERS_CACHE", str(model_cache_dir / "transformers"))
+
     try:
         from PIL import Image
         from sentence_transformers import SentenceTransformer
@@ -232,7 +248,26 @@ def load_clip_runtime(model_name: str) -> tuple[Any, Any]:
             "Run: .venv/bin/python -m pip install -r requirements-clip.txt"
         ) from error
 
-    return SentenceTransformer(model_name), Image.open
+    try:
+        model = SentenceTransformer(
+            model_name,
+            cache_folder=str(model_cache_dir),
+        )
+    except OSError as error:
+        raise RuntimeError(
+            "CLIP could not load its local model cache. "
+            f"The current cache directory is {model_cache_dir}. "
+            "You can override it with ADS_CLIP_MODEL_CACHE_DIR."
+        ) from error
+
+    return model, Image.open
+
+
+def get_clip_model_cache_dir() -> Path:
+    configured = os.getenv("ADS_CLIP_MODEL_CACHE_DIR", "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    return DEFAULT_CLIP_MODEL_CACHE_DIR
 
 
 def encode_text(model: Any, text: str) -> list[float]:

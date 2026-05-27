@@ -58,10 +58,28 @@ Run the Streamlit prototype:
 .venv/bin/streamlit run src/ui.py
 ```
 
+The UI offers three search modes:
+
+```text
+⚡ Instant   metadata + local text inspection
+🧠 Reasoning instant search + Azure OpenAI reranking
+👁️ Visual    reasoning search + CLIP prefilter + Azure visual inspection
+```
+
+Open `⚙️ Customize mode` in the sidebar to override text inspection, LLM usage,
+📎 CLIP prefiltering, Azure visual inspection, and 🛠️ inspection limits.
+The app automatically adjusts dependent limits: Azure OpenAI candidate pool is
+kept at least as large as requested results, and 📎 CLIP page selection is kept
+large enough to cover the Azure visual inspection budget.
+
 Optional: install the local CLIP visual prefilter:
 ```bash
 .venv/bin/python -m pip install -r requirements-clip.txt
 ```
+
+CLIP is off by default. Enable it from the UI only when you want local visual
+page ranking. Model files are cached under `indexes/model_cache/huggingface` by
+default instead of your home directory.
 
 The agent flow currently shows:
 
@@ -70,7 +88,7 @@ understand query
 → search English/Japanese/mixed metadata
 → inspect extracted English/Japanese/mixed text from top candidate documents when useful
 → use local OCR fallback for scanned PDF pages when extracted text is too thin
-→ prefilter rendered visual pages locally with CLIP
+→ optionally prefilter rendered visual pages locally with CLIP
 → decide whether visual inspection is needed next
 → return ranked matches with reasons
 ```
@@ -112,8 +130,7 @@ AZURE_VISION_KEY="YOUR-VISION-KEY"
 AZURE_VISION_API_VERSION="2024-02-01"
 AZURE_VISION_FEATURES="caption,denseCaptions,tags,read,objects"
 
-ADS_OCR_MIN_CHARS="120"
-ADS_OCR_LANGS="eng"
+ADS_CLIP_MODEL_CACHE_DIR="indexes/model_cache/huggingface"
 ```
 
 Run:
@@ -136,9 +153,9 @@ If a candidate PDF has very little extractable text, the content layer can use
 local Tesseract OCR as a fallback. This is intentionally local and free of Azure
 OCR calls. The fallback is best for scanned PDFs. PPTX/DOCX image-only OCR needs
 a separate slide/page rendering strategy, so it is left as a later architecture
-choice. Set `ADS_OCR_LANGS` for installed Tesseract languages; for Japanese
-scanned documents, the local machine or deployment image needs Japanese
-Tesseract language data.
+choice. OCR thresholds and languages are code-level constants in
+`src/content.py`, not environment variables. For Japanese scanned documents, the
+local machine or deployment image needs Japanese Tesseract language data.
 
 Run Azure Vision visual inspection:
 ```bash
@@ -155,7 +172,9 @@ Run Azure Vision visual inspection:
 With `--visual-prefilter clip`, the agent ranks rendered pages locally first and
 sends only the top CLIP-selected pages to Azure Vision. If CLIP is selected but
 not installed, Azure Vision is skipped to avoid sending unfiltered pages to a
-billable verifier.
+billable verifier. If CLIP needs to download its model, it uses
+`ADS_CLIP_MODEL_CACHE_DIR` rather than the default Hugging Face cache under your
+home directory.
 
 ## Azure App Service
 

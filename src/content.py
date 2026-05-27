@@ -9,7 +9,6 @@ experiments do not keep re-parsing the same PDFs.
 from __future__ import annotations
 
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -27,6 +26,7 @@ DOCX_CHUNK_CHARS = 2500
 MAX_EXCEL_ROWS_PER_SHEET = 200
 MAX_EXCEL_COLS_PER_SHEET = 50
 OCR_MIN_CHARS_PER_FILE = 120
+OCR_LANGUAGES = "eng"
 OCR_RENDER_DPI = 160
 OCR_TIMEOUT_SECONDS_PER_PAGE = 30
 SUPPORTED_CONTENT_EXTENSIONS = {".pdf", ".pptx", ".docx", ".xlsx", ".xlsm"}
@@ -570,18 +570,11 @@ def ocr_pdf_pages(
 
 
 def get_ocr_min_chars_per_file() -> int:
-    value = os.getenv("ADS_OCR_MIN_CHARS", "").strip()
-    if not value:
-        return OCR_MIN_CHARS_PER_FILE
-
-    try:
-        return max(0, int(value))
-    except ValueError:
-        return OCR_MIN_CHARS_PER_FILE
+    return OCR_MIN_CHARS_PER_FILE
 
 
 def get_ocr_languages() -> str:
-    return os.getenv("ADS_OCR_LANGS", "eng").strip() or "eng"
+    return OCR_LANGUAGES
 
 
 def split_text_into_units(text: str, unit_size: int) -> list[str]:

@@ -53,6 +53,30 @@ JAPANESE_DOMAIN_TERMS = {
     "通信",
     "金融",
 }
+ENGLISH_TOKEN_ALIASES = {
+    "charts": ["chart"],
+    "decks": ["deck"],
+    "documents": ["document"],
+    "graphs": ["graph"],
+    "images": ["image"],
+    "pictures": ["picture"],
+    "presentations": ["presentation"],
+    "reports": ["report"],
+    "slides": ["slide"],
+    "tables": ["table"],
+}
+NEGATIVE_REASON_MARKERS = {
+    "do not",
+    "does not",
+    "doesn't",
+    "don't",
+    "lack",
+    "lacks",
+    "missing",
+    "no ",
+    "not ",
+    "without",
+}
 
 FIELD_WEIGHTS = {
     "filename": 5,
@@ -67,14 +91,33 @@ FIELD_WEIGHTS = {
 
 STOPWORDS = {
     "a",
+    "able",
+    "about",
+    "also",
     "an",
     "and",
+    "any",
+    "are",
+    "as",
+    "at",
+    "be",
+    "been",
+    "being",
+    "by",
+    "can",
     "company",
+    "could",
+    "did",
+    "do",
+    "does",
     "drive",
     "find",
     "for",
     "from",
+    "get",
     "had",
+    "has",
+    "have",
     "i",
     "in",
     "is",
@@ -82,19 +125,33 @@ STOPWORDS = {
     "like",
     "looking",
     "me",
+    "may",
+    "might",
     "of",
     "on",
     "one",
     "or",
     "probably",
     "remember",
+    "should",
     "some",
     "something",
     "that",
     "the",
+    "these",
+    "this",
+    "those",
     "to",
     "was",
+    "were",
+    "what",
+    "when",
+    "where",
+    "which",
+    "who",
+    "will",
     "with",
+    "would",
 }
 
 
@@ -148,6 +205,7 @@ def tokenize(value: Any) -> list[str]:
             tokens.extend(tokenize_cjk_chunk(chunk))
         else:
             tokens.append(chunk)
+            tokens.extend(ENGLISH_TOKEN_ALIASES.get(chunk, []))
 
     return dedupe_tokens(
         token
@@ -426,16 +484,34 @@ def search_llm(
         reasons = ranking.get("reasons", [])
         if not isinstance(reasons, list):
             reasons = [str(reasons)]
+        positive_reasons = sanitize_reasons([str(reason) for reason in reasons])
+        if not positive_reasons:
+            positive_reasons = candidate.reasons
+        if not positive_reasons and candidate.score <= 0:
+            continue
 
         results.append(
             SearchResult(
                 record=candidate.record,
                 score=score,
-                reasons=[str(reason) for reason in reasons],
+                reasons=positive_reasons,
             )
         )
 
     return results[:top_k]
+
+
+def sanitize_reasons(reasons: list[str]) -> list[str]:
+    return [
+        reason
+        for reason in dedupe(reasons)
+        if reason.strip() and not is_negative_reason(reason)
+    ]
+
+
+def is_negative_reason(reason: str) -> bool:
+    normalized = normalize_text(reason)
+    return any(marker in normalized for marker in NEGATIVE_REASON_MARKERS)
 
 
 def rerank_with_azure_openai(
@@ -557,13 +633,17 @@ def format_result(result: SearchResult, rank: int) -> str:
     return "\n".join(
         [
             f"{rank}. {record.get('filename')}",
-            f"   score: {result.score:.2f}",
+            f"   score: {bounded_score(result.score):.2f}",
             f"   path: {record.get('relative_path')}",
             f"   type: {record.get('type_label')} | size: {record.get('file_size_label', 'unknown')}",
             "   reasons:",
             reason_lines,
         ]
     )
+
+
+def bounded_score(score: float) -> float:
+    return max(0.0, min(100.0, score))
 
 
 def serialize_results(results: list[SearchResult]) -> list[dict[str, Any]]:
@@ -574,7 +654,7 @@ def serialize_results(results: list[SearchResult]) -> list[dict[str, Any]]:
             "relative_path": result.record.get("relative_path"),
             "type_label": result.record.get("type_label"),
             "file_size_label": result.record.get("file_size_label"),
-            "score": result.score,
+            "score": bounded_score(result.score),
             "reasons": result.reasons,
         }
         for result in results
