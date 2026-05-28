@@ -26,31 +26,43 @@ AZURE_RUNTIME_DIR_NAME = "agentic-document-search"
 FILE_TYPE_CHOICES = {
     "excel": {
         "label": "Excel",
-        "icon": "▦",
         "accent": "#16833a",
         "extensions": {".xlsx", ".xlsm", ".xls"},
     },
     "word": {
         "label": "Word",
-        "icon": "□",
         "accent": "#2563eb",
         "extensions": {".docx", ".doc"},
     },
     "powerpoint": {
         "label": "PowerPoint",
-        "icon": "▣",
         "accent": "#ea580c",
         "extensions": {".pptx", ".ppt"},
     },
     "pdf": {
         "label": "PDF",
-        "icon": "▤",
         "accent": "#dc2626",
         "extensions": {".pdf"},
     },
 }
 VISUAL_FILE_TYPE_KEYS = {"pdf"}
 TEXT_HEAVY_FILE_TYPE_KEYS = {"excel", "word"}
+FLOW_STEPS = [
+    ("Semantic Kernel Auto Mode", "Auto"),
+    ("File Type Filter", "File Type"),
+    ("Translate Query", "Translate"),
+    ("Understand Query", "Understand"),
+    ("Metadata Search", "Metadata"),
+    ("Search Memory", "Memory"),
+    ("Azure AI Search", "AI Search"),
+    ("Inspect Content", "Text"),
+    ("CLIP Visual Prefilter", "CLIP"),
+    ("Inspect Visuals", "Vision"),
+    ("Return Answer", "Answer"),
+]
+FLOW_ALIASES = {
+    "Metadata Search + LLM Rerank": "Metadata Search",
+}
 
 
 def main() -> None:
@@ -69,6 +81,7 @@ def main() -> None:
     query = st.text_input(
         "What do you remember?",
         placeholder="Example: I remember a slide with a blue graph",
+        key="query_input",
     )
 
     with st.sidebar:
@@ -77,7 +90,7 @@ def main() -> None:
 
         search_mode = st.radio(
             "Search mode",
-            options=["instant", "reasoning", "visual", "auto"],
+            options=["auto", "instant", "reasoning", "visual"],
             format_func=format_search_mode,
             index=0,
             help="Choose how much the agent should inspect before answering.",
@@ -213,14 +226,18 @@ def main() -> None:
             "semantic-kernel" if search_mode == "auto" else "manual"
         )
 
-        if search_mode in {"auto", "visual"} and selected_file_types <= TEXT_HEAVY_FILE_TYPE_KEYS:
+        if (
+            selected_file_types
+            and search_mode in {"auto", "visual"}
+            and selected_file_types <= TEXT_HEAVY_FILE_TYPE_KEYS
+        ):
             mode = "llm"
             visual_mode = "never"
             visual_prefilter = "none"
             st.caption(
                 "Word/Excel-only search uses reasoning over extracted text and skips visual inspection."
             )
-        elif not selected_file_types & VISUAL_FILE_TYPE_KEYS:
+        elif selected_file_types and not selected_file_types & VISUAL_FILE_TYPE_KEYS:
             visual_mode = "never"
             visual_prefilter = "none"
             st.caption("Visual inspection is skipped because no visual-friendly file type is selected.")
@@ -237,11 +254,14 @@ def main() -> None:
         max_clip_pages,
     )
 
-    search_clicked = st.button("Search", type="primary")
-
-    if not selected_file_types:
-        st.warning("Choose at least one file type.")
-        return
+    _, search_col, _ = st.columns([1.2, 1, 1.2])
+    with search_col:
+        search_clicked = st.button(
+            "Search",
+            type="primary",
+            key="search_button",
+            use_container_width=True,
+        )
 
     if not query:
         if search_clicked:
@@ -260,9 +280,25 @@ def main() -> None:
         show_cached_response()
         return
 
+    progress_placeholder = st.empty()
     with st.spinner("Preparing index and running agentic search..."):
         try:
             ensure_index_exists(index_path)
+            render_progress_flow(
+                progress_placeholder,
+                steps=[],
+                current_step="Semantic Kernel Auto Mode"
+                if orchestration_mode == "semantic-kernel"
+                else "Metadata Search",
+            )
+
+            def update_progress(steps: list[object], current_step: str | None) -> None:
+                render_progress_flow(
+                    progress_placeholder,
+                    steps=steps,
+                    current_step=current_step,
+                )
+
             response = run_agent(
                 query=query,
                 index_path=index_path,
@@ -286,11 +322,13 @@ def main() -> None:
                 azure_ai_search_mode=azure_ai_search_mode,
                 search_memory_path=search_memory_path,
                 allowed_extensions=selected_extensions,
+                step_callback=update_progress,
             )
         except Exception as error:
             st.error(str(error))
             return
 
+    progress_placeholder.empty()
     st.session_state.last_response = response
     st.session_state.last_query = query
     show_agent_steps(response)
@@ -310,14 +348,14 @@ def show_cached_response() -> None:
 def render_file_type_buttons() -> set[str]:
     st.caption("File type")
     if "selected_file_types" not in st.session_state:
-        st.session_state.selected_file_types = list(FILE_TYPE_CHOICES)
+        st.session_state.selected_file_types = []
 
     selected = set(st.session_state.selected_file_types)
     with st.container(key="file_type_filter"):
         columns = st.columns(4)
         for column, (file_type, config) in zip(columns, FILE_TYPE_CHOICES.items()):
             is_selected = file_type in selected
-            button_label = f"{config['icon']} {config['label']}"
+            button_label = str(config["label"])
             with column:
                 clicked = st.button(
                     button_label,
@@ -340,7 +378,10 @@ def render_file_type_buttons() -> set[str]:
     return selected
 
 
-def extensions_for_file_types(file_types: set[str]) -> set[str]:
+def extensions_for_file_types(file_types: set[str]) -> set[str] | None:
+    if not file_types:
+        return None
+
     extensions: set[str] = set()
     for file_type in file_types:
         extensions.update(FILE_TYPE_CHOICES[file_type]["extensions"])
@@ -452,15 +493,13 @@ def ensure_index_exists(index_path: Path) -> None:
 
     container_url = os.getenv("AZURE_BLOB_CONTAINER_URL", "").strip()
     if container_url:
-        records = build_blob_index(index_path, container_url)
-        st.info(f"Created Azure Blob index with {len(records)} files.")
+        build_blob_index(index_path, container_url)
         return
 
     data_dir = PROJECT_ROOT / "data/raw"
     if data_dir.exists():
         records = collect_file_metadata(data_dir)
         save_json(records, index_path)
-        st.info(f"Created local index with {len(records)} files.")
         return
 
     raise FileNotFoundError(
@@ -506,10 +545,11 @@ def inject_ui_styles() -> None:
         .st-key-file_type_word button,
         .st-key-file_type_powerpoint button,
         .st-key-file_type_pdf button {
-            min-height: 3.4rem;
+            min-height: 3.7rem;
             border-radius: 8px;
             background: white;
             font-weight: 750;
+            font-size: 1.03rem;
             box-shadow: none;
         }
 
@@ -547,38 +587,66 @@ def inject_ui_styles() -> None:
             color: white;
         }
 
+        .st-key-query_input input {
+            min-height: 3.4rem;
+            border-radius: 8px;
+            border: 1.5px solid #cbd5e1;
+            background: #f8fafc;
+            font-size: 1.05rem;
+        }
+
+        .st-key-query_input input:focus {
+            border-color: #f97316;
+            box-shadow: 0 0 0 0.12rem rgba(249, 115, 22, 0.18);
+        }
+
+        .st-key-search_button button {
+            min-height: 3.25rem;
+            border-radius: 8px;
+            background: #f97316;
+            border-color: #f97316;
+            color: white;
+            font-weight: 800;
+            font-size: 1.05rem;
+        }
+
+        .st-key-search_button button:hover {
+            background: #ea580c;
+            border-color: #ea580c;
+            color: white;
+        }
+
         .ads-flow {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
-            gap: 0.55rem;
-            margin: 0.35rem 0 1rem;
+            display: flex;
+            align-items: stretch;
+            gap: 0.45rem;
+            overflow-x: auto;
+            padding: 0.2rem 0 0.65rem;
+            margin: 0.2rem 0 1rem;
         }
 
         .ads-step {
-            border: 1px solid var(--ads-border);
+            position: relative;
+            flex: 0 0 132px;
+            border: 1.5px solid var(--ads-blue);
             border-radius: 8px;
-            padding: 0.7rem 0.8rem;
-            min-height: 4.2rem;
+            padding: 0.68rem 0.75rem;
+            min-height: 3.85rem;
             background: white;
+            color: var(--ads-blue);
         }
 
         .ads-step.done {
-            background: var(--ads-blue-soft);
-            border-color: #93c5fd;
+            background: var(--ads-blue);
+            border-color: var(--ads-blue);
+            color: white;
         }
 
         .ads-step.active,
-        .ads-step.partial,
-        .ads-step.deferred {
-            background: #fff7ed;
-            border-color: #fdba74;
-        }
-
-        .ads-step.skipped,
-        .ads-step.not-needed-yet {
-            color: var(--ads-muted);
-            background: white;
-            border-style: dashed;
+        .ads-step.current {
+            background: #f97316;
+            border-color: #f97316;
+            color: white;
         }
 
         .ads-step-name {
@@ -590,7 +658,8 @@ def inject_ui_styles() -> None:
         .ads-step-status {
             margin-top: 0.35rem;
             font-size: 0.72rem;
-            color: var(--ads-muted);
+            color: currentColor;
+            opacity: 0.78;
             text-transform: uppercase;
             letter-spacing: 0.02em;
         }
@@ -605,24 +674,17 @@ def inject_ui_styles() -> None:
         .ads-score-ring {
             --score: 0;
             --score-color: #ef4444;
-            width: 76px;
+            width: 96px;
             aspect-ratio: 1;
             border-radius: 50%;
             background:
-                radial-gradient(closest-side, white 70%, transparent 72%),
+                radial-gradient(closest-side, white 66%, transparent 68%),
                 conic-gradient(var(--score-color) calc(var(--score) * 1%), #e5e7eb 0);
             display: grid;
             place-items: center;
             color: var(--ads-ink);
-            font-weight: 800;
-            font-size: 1.05rem;
-        }
-
-        .ads-score-caption {
-            text-align: center;
-            color: var(--ads-muted);
-            font-size: 0.72rem;
-            margin-top: 0.25rem;
+            font-weight: 950;
+            font-size: 1.65rem;
         }
 
         .ads-reasons {
@@ -641,19 +703,19 @@ def inject_ui_styles() -> None:
 
 def format_search_mode(value: str) -> str:
     return {
-        "instant": "⚡ Instant",
+        "auto": "🤖 Auto",
+        "instant": "🚧 Safety",
         "reasoning": "🧠 Reasoning",
         "visual": "👁️ Visual",
-        "auto": "🧭 Auto",
     }[value]
 
 
 def mode_summary(value: str) -> str:
     return {
-        "instant": "Metadata plus local text inspection. No Azure AI calls.",
+        "auto": "Semantic Kernel chooses the search strategy.",
+        "instant": "Filename and folder-path search only. No file content inspection.",
         "reasoning": "Instant search plus Azure OpenAI reranking.",
         "visual": "Reasoning search plus CLIP prefilter and Azure visual inspection.",
-        "auto": "Semantic Kernel chooses the search strategy.",
     }[value]
 
 
@@ -661,7 +723,7 @@ def preset_settings(value: str) -> dict[str, object]:
     presets = {
         "instant": {
             "mode": "local",
-            "content_mode": "auto",
+            "content_mode": "never",
             "translator_mode": "never",
             "azure_ai_search_mode": "never",
             "visual_mode": "never",
@@ -720,7 +782,6 @@ def preset_settings(value: str) -> dict[str, object]:
 
 
 def show_empty_state() -> None:
-    st.info("Try a vague memory like: “Find the report about open source.”")
     st.markdown(
         """
         **Good demo queries**
@@ -746,45 +807,15 @@ def show_cost_notice(
     max_visual_pages_per_file: int,
     max_clip_pages: int,
 ) -> None:
-    if orchestration_mode == "semantic-kernel":
-        st.warning("Semantic Kernel auto mode may use Azure OpenAI to choose a search strategy.")
-
-    if mode == "llm":
-        st.warning("Azure OpenAI reranking is enabled. This may use paid tokens.")
-
-    if translator_mode == "auto":
-        st.info("Azure Translator query expansion is enabled for Japanese prompts.")
-
-    if azure_ai_search_mode == "auto":
-        st.info("Azure AI Search may be used as an optional retrieval tool.")
-
-    if visual_prefilter == "clip":
-        st.info(
-            "CLIP prefilter is local. First use may require installing optional dependencies "
-            "and downloading the CLIP model."
-        )
-
-    if visual_mode == "azure":
-        max_calls = estimate_vision_calls(
-            visual_prefilter,
-            max_visual_files,
-            max_visual_pages_per_file,
-            max_clip_pages,
-        )
-        st.warning(
-            f"Azure Vision is enabled. This run can make up to {max_calls} image-analysis calls."
-        )
-    elif visual_mode == "auto":
-        max_calls = estimate_vision_calls(
-            visual_prefilter,
-            max_visual_files,
-            max_visual_pages_per_file,
-            max_clip_pages,
-        )
-        st.info(
-            "Azure Vision may run only when the query has visual clues. "
-            f"If it runs, the current maximum is {max_calls} image-analysis calls."
-        )
+    azure_ai_enabled = (
+        orchestration_mode == "semantic-kernel"
+        or mode == "llm"
+        or translator_mode == "auto"
+        or azure_ai_search_mode == "auto"
+        or visual_mode in {"azure", "auto"}
+    )
+    if azure_ai_enabled:
+        st.warning("⚠️ Azure OpenAI and Vision are enabled!")
 
 
 def estimate_vision_calls(
@@ -800,21 +831,7 @@ def estimate_vision_calls(
 
 def show_agent_steps(response: object) -> None:
     st.subheader("Agent Flow")
-    step_cards = []
-    for step in response.steps:
-        status_class = css_class_for_status(step.status)
-        step_cards.append(
-            f"""
-            <div class="ads-step {status_class}">
-                <div class="ads-step-name">{escape(step.name)}</div>
-                <div class="ads-step-status">{escape(step.status)}</div>
-            </div>
-            """
-        )
-    st.markdown(
-        '<div class="ads-flow">' + "\n".join(step_cards) + "</div>",
-        unsafe_allow_html=True,
-    )
+    render_flow_html(response.steps, current_step=None)
 
     with st.expander("Step details"):
         for step in response.steps:
@@ -822,8 +839,57 @@ def show_agent_steps(response: object) -> None:
             st.caption(step.detail)
 
 
-def css_class_for_status(status: str) -> str:
-    return status.lower().replace(" ", "-")
+def render_progress_flow(
+    placeholder: object,
+    steps: list[object],
+    current_step: str | None,
+) -> None:
+    with placeholder.container():
+        st.subheader("Agent Flow")
+        render_flow_html(steps, current_step=current_step)
+
+
+def render_flow_html(steps: list[object], current_step: str | None) -> None:
+    completed = {
+        normalize_flow_step_name(str(step.name))
+        for step in steps
+        if str(step.status).lower() in {"done", "partial", "fallback"}
+    }
+    active = normalize_flow_step_name(current_step) if current_step else None
+    cards = []
+    for step_key, label in FLOW_STEPS:
+        if step_key in completed:
+            state_class = "done"
+            state_label = "done"
+        elif step_key == active:
+            state_class = "current"
+            state_label = "current"
+        else:
+            state_class = "pending"
+            state_label = "pending"
+        cards.append(
+            "<div class='ads-step "
+            + state_class
+            + "'><div class='ads-step-name'>"
+            + escape(label)
+            + "</div><div class='ads-step-status'>"
+            + escape(state_label)
+            + "</div></div>"
+        )
+    render_html("<div class='ads-flow'>" + "".join(cards) + "</div>")
+
+
+def normalize_flow_step_name(name: str | None) -> str | None:
+    if not name:
+        return None
+    return FLOW_ALIASES.get(name, name)
+
+
+def render_html(html: str) -> None:
+    if hasattr(st, "html"):
+        st.html(html)
+    else:
+        st.markdown(html, unsafe_allow_html=True)
 
 
 def show_results(response: object) -> None:
@@ -873,7 +939,6 @@ def show_score_ring(score: float) -> None:
                 >
                     {bounded:.0f}
                 </div>
-                <div class="ads-score-caption">score</div>
             </div>
         </div>
         """,
@@ -954,7 +1019,6 @@ def reason_category(reason: str) -> str:
     ):
         return "metadata"
     return "other"
-    return cleaned
 
 
 def compact_reason(reason: str) -> str:

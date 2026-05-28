@@ -16,7 +16,7 @@ import argparse
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from azure_ai_search import (
     missing_azure_ai_search_config,
@@ -163,6 +163,9 @@ class AgentResponse:
     evidence_scope: str
 
 
+StepCallback = Callable[[list[AgentStep], str | None], None]
+
+
 def understand_query(query: str) -> QueryUnderstanding:
     tokens = set(tokenize(query))
     normalized_query = normalize_text(query)
@@ -262,14 +265,17 @@ def run_agent(
     azure_ai_search_mode: str = "never",
     search_memory_path: Path = DEFAULT_SEARCH_MEMORY_PATH,
     allowed_extensions: set[str] | None = None,
+    step_callback: StepCallback | None = None,
 ) -> AgentResponse:
     records = load_index(index_path)
     steps: list[AgentStep] = []
+    emit_progress(steps, step_callback, "File Type Filter")
     records = filter_records_by_extension(records, allowed_extensions)
     if allowed_extensions is not None:
-        steps.append(make_file_type_filter_step(records, allowed_extensions))
+        add_step(steps, make_file_type_filter_step(records, allowed_extensions), step_callback)
 
     if orchestration_mode == "semantic-kernel":
+        emit_progress(steps, step_callback, "Semantic Kernel Auto Mode")
         strategy_plan = plan_search_strategy(
             query=query,
             azure_ai_search_available=not missing_azure_ai_search_config(),
@@ -280,7 +286,7 @@ def run_agent(
         visual_mode = strategy_plan.visual_mode
         visual_prefilter = strategy_plan.visual_prefilter
         azure_ai_search_mode = strategy_plan.azure_ai_search_mode
-        steps.append(make_strategy_step(strategy_plan))
+        add_step(steps, make_strategy_step(strategy_plan), step_callback)
 
     if not selected_extensions_support_visuals(allowed_extensions):
         visual_mode = "never"
@@ -300,6 +306,7 @@ def run_agent(
     ):
         max_clip_pages = max_visual_files * max_visual_pages_per_file
 
+    emit_progress(steps, step_callback, "Translate Query")
     translation = prepare_query_translation(query, translator_mode)
     search_query = translation.expanded_query
     query_understanding = understand_query(search_query)
@@ -307,20 +314,25 @@ def run_agent(
 
     translation_step = make_translation_step(translation, translator_mode)
     if translation_step:
-        steps.append(translation_step)
+        add_step(steps, translation_step, step_callback)
 
-    steps.append(
+    emit_progress(steps, step_callback, "Understand Query")
+    add_step(
+        steps,
         AgentStep(
             name="Understand Query",
             status="done",
             detail=format_understanding_detail(query_understanding),
-        )
+        ),
+        step_callback,
     )
 
+    emit_progress(steps, step_callback, "Metadata Search")
     if mode == "local" or not records:
         results = search_local(search_query, records, top_k=top_k)
         evidence_scope = "metadata only"
-        steps.append(
+        add_step(
+            steps,
             AgentStep(
                 name="Metadata Search",
                 status="done",
@@ -328,7 +340,8 @@ def run_agent(
                     f"Searched {len(records)} file metadata records with local "
                     f"keyword and fuzzy matching. Returned top {len(results)}."
                 ),
-            )
+            ),
+            step_callback,
         )
     else:
         try:
@@ -339,7 +352,8 @@ def run_agent(
                 candidate_pool_size=candidate_pool_size,
             )
             evidence_scope = "metadata only with Azure OpenAI reranking"
-            steps.append(
+            add_step(
+                steps,
                 AgentStep(
                     name="Metadata Search + LLM Rerank",
                     status="done",
@@ -348,12 +362,14 @@ def run_agent(
                         f"then reranked metadata only with Azure OpenAI. Returned "
                         f"top {len(results)}."
                     ),
-                )
+                ),
+                step_callback,
             )
         except Exception as error:
             results = search_local(search_query, records, top_k=top_k)
             evidence_scope = "metadata only"
-            steps.append(
+            add_step(
+                steps,
                 AgentStep(
                     name="Metadata Search + LLM Rerank",
                     status="deferred",
@@ -361,9 +377,11 @@ def run_agent(
                         "Azure OpenAI reranking could not run, so the agent used "
                         f"local metadata search instead. {error}"
                     ),
-                )
+                ),
+                step_callback,
             )
 
+    emit_progress(steps, step_callback, "Search Memory")
     memory_candidates = find_memory_candidates(
         query=search_query,
         records=records,
@@ -373,7 +391,7 @@ def run_agent(
     if memory_candidates:
         results = merge_search_results(results, memory_candidates)
         evidence_scope = f"{evidence_scope} + search memory"
-        steps.append(make_memory_step(memory_candidates))
+        add_step(steps, make_memory_step(memory_candidates), step_callback)
     else:
         memory_evidence = apply_memory_evidence(
             query=search_query,
@@ -383,6 +401,7 @@ def run_agent(
         if memory_evidence:
             results = sorted(results, key=lambda result: result.score, reverse=True)
 
+    emit_progress(steps, step_callback, "Azure AI Search")
     azure_search_results = run_optional_azure_ai_search(
         query=search_query,
         records=records,
@@ -390,6 +409,7 @@ def run_agent(
         azure_ai_search_mode=azure_ai_search_mode,
         steps=steps,
     )
+    emit_progress(steps, step_callback, "Inspect Content")
     if azure_search_results:
         results = merge_search_results(results, azure_search_results)
         results = sorted(results, key=lambda result: result.score, reverse=True)
@@ -414,13 +434,18 @@ def run_agent(
         apply_content_evidence(results, content_evidence)
         results = sorted(results, key=lambda result: result.score, reverse=True)[:top_k]
         evidence_scope = f"{evidence_scope} + extracted candidate text"
-        steps.append(make_content_step(content_evidence))
+        add_step(steps, make_content_step(content_evidence), step_callback)
     else:
-        steps.append(make_content_skipped_step(query_understanding, results, content_mode))
+        add_step(
+            steps,
+            make_content_skipped_step(query_understanding, results, content_mode),
+            step_callback,
+        )
 
     selected_visual_pages: dict[str, list[int]] | None = None
     clip_prefilter_failed = False
 
+    emit_progress(steps, step_callback, "CLIP Visual Prefilter")
     if should_run_clip_prefilter(query_understanding, results, visual_prefilter):
         try:
             clip_evidence, selected_visual_pages = rank_visual_pages_with_clip(
@@ -434,20 +459,25 @@ def run_agent(
             apply_clip_evidence(results, clip_evidence)
             results = sorted(results, key=lambda result: result.score, reverse=True)[:top_k]
             evidence_scope = f"{evidence_scope} + local CLIP page prefilter"
-            steps.append(make_clip_step(clip_evidence, max_clip_pages))
+            add_step(steps, make_clip_step(clip_evidence, max_clip_pages), step_callback)
         except RuntimeError as error:
             clip_prefilter_failed = True
-            steps.append(make_clip_error_step(str(error)))
+            add_step(steps, make_clip_error_step(str(error)), step_callback)
     elif query_understanding.should_inspect_visuals:
-        steps.append(make_clip_skipped_step(visual_prefilter))
+        add_step(steps, make_clip_skipped_step(visual_prefilter), step_callback)
 
+    emit_progress(steps, step_callback, "Inspect Visuals")
     if should_run_visual_inspection(query_understanding, results, visual_mode):
         if clip_prefilter_failed and visual_prefilter == "clip":
-            steps.append(make_visual_blocked_by_clip_step())
+            add_step(steps, make_visual_blocked_by_clip_step(), step_callback)
         else:
             missing_visual_config = missing_vision_config()
             if missing_visual_config:
-                steps.append(make_visual_missing_config_step(missing_visual_config))
+                add_step(
+                    steps,
+                    make_visual_missing_config_step(missing_visual_config),
+                    step_callback,
+                )
             else:
                 visual_evidence = inspect_visuals_for_results(
                     query=search_query,
@@ -460,13 +490,14 @@ def run_agent(
                 apply_visual_evidence(results, visual_evidence)
                 results = sorted(results, key=lambda result: result.score, reverse=True)[:top_k]
                 evidence_scope = f"{evidence_scope} + Azure Vision page analysis"
-                steps.append(make_visual_step(visual_evidence))
+                add_step(steps, make_visual_step(visual_evidence), step_callback)
     elif query_understanding.should_inspect_visuals:
-        steps.append(make_visual_skipped_step(visual_mode))
+        add_step(steps, make_visual_skipped_step(visual_mode), step_callback)
 
+    emit_progress(steps, step_callback, "Return Answer")
     results = sorted(results, key=lambda result: result.score, reverse=True)[:top_k]
     normalize_result_scores(results)
-    steps.append(make_answer_step(results))
+    add_step(steps, make_answer_step(results), step_callback)
     remember_search(query, results, search_memory_path)
 
     return AgentResponse(
@@ -475,6 +506,24 @@ def run_agent(
         results=results,
         evidence_scope=evidence_scope,
     )
+
+
+def add_step(
+    steps: list[AgentStep],
+    step: AgentStep,
+    step_callback: StepCallback | None,
+) -> None:
+    steps.append(step)
+    emit_progress(steps, step_callback, None)
+
+
+def emit_progress(
+    steps: list[AgentStep],
+    step_callback: StepCallback | None,
+    current_step: str | None,
+) -> None:
+    if step_callback:
+        step_callback(list(steps), current_step)
 
 
 def prepare_query_translation(query: str, translator_mode: str) -> QueryTranslation:
