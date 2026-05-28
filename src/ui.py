@@ -48,21 +48,22 @@ FILE_TYPE_CHOICES = {
 VISUAL_FILE_TYPE_KEYS = {"pdf"}
 TEXT_HEAVY_FILE_TYPE_KEYS = {"excel", "word"}
 FLOW_STEPS = [
-    ("Semantic Kernel Auto Mode", "Auto"),
-    ("File Type Filter", "File Type"),
+    ("Semantic Kernel Auto Mode", "Plan route"),
+    ("File Type Filter", "File types"),
     ("Translate Query", "Translate"),
-    ("Understand Query", "Understand"),
-    ("Metadata Search", "Metadata"),
-    ("Search Memory", "Memory"),
+    ("Understand Query", "Read request"),
+    ("Metadata Search", "Names & folders"),
+    ("Search Memory", "Recall"),
     ("Azure AI Search", "AI Search"),
-    ("Inspect Content", "Text"),
-    ("CLIP Visual Prefilter", "CLIP"),
-    ("Inspect Visuals", "Vision"),
+    ("Inspect Content", "Read text"),
+    ("CLIP Visual Prefilter", "Visual filter"),
+    ("Inspect Visuals", "Check pages"),
     ("Return Answer", "Answer"),
 ]
 FLOW_ALIASES = {
     "Metadata Search + LLM Rerank": "Metadata Search",
 }
+FLOW_LABELS = dict(FLOW_STEPS)
 
 
 def main() -> None:
@@ -243,6 +244,7 @@ def main() -> None:
             st.caption("Visual inspection is skipped because no visual-friendly file type is selected.")
 
     show_cost_notice(
+        search_mode,
         orchestration_mode,
         mode,
         translator_mode,
@@ -619,34 +621,65 @@ def inject_ui_styles() -> None:
         .ads-flow {
             display: flex;
             align-items: stretch;
-            gap: 0.45rem;
-            overflow-x: auto;
-            padding: 0.2rem 0 0.65rem;
+            flex-wrap: wrap;
+            gap: 0.55rem;
+            overflow: visible;
+            padding: 0.2rem 0 0.8rem;
             margin: 0.2rem 0 1rem;
         }
 
         .ads-step {
             position: relative;
-            flex: 0 0 132px;
-            border: 1.5px solid var(--ads-blue);
-            border-radius: 8px;
-            padding: 0.68rem 0.75rem;
-            min-height: 3.85rem;
+            flex: 0 1 145px;
+            padding: 0.62rem 1.2rem 0.62rem 0.85rem;
+            min-height: 3.25rem;
             background: white;
             color: var(--ads-blue);
+            clip-path: polygon(0 0, calc(100% - 18px) 0, 100% 50%, calc(100% - 18px) 100%, 0 100%, 12px 50%);
+        }
+
+        .ads-step::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background: var(--ads-blue);
+            clip-path: inherit;
+            z-index: 0;
+        }
+
+        .ads-step::after {
+            content: "";
+            position: absolute;
+            inset: 1.5px;
+            background: white;
+            clip-path: inherit;
+            z-index: 0;
+        }
+
+        .ads-step > * {
+            position: relative;
+            z-index: 1;
         }
 
         .ads-step.done {
             background: var(--ads-blue);
-            border-color: var(--ads-blue);
             color: white;
         }
 
         .ads-step.active,
         .ads-step.current {
             background: #f97316;
-            border-color: #f97316;
             color: white;
+        }
+
+        .ads-step.done::before,
+        .ads-step.done::after {
+            background: var(--ads-blue);
+        }
+
+        .ads-step.current::before,
+        .ads-step.current::after {
+            background: #f97316;
         }
 
         .ads-step-name {
@@ -797,6 +830,7 @@ def show_empty_state() -> None:
 
 
 def show_cost_notice(
+    search_mode: str,
     orchestration_mode: str,
     mode: str,
     translator_mode: str,
@@ -807,15 +841,16 @@ def show_cost_notice(
     max_visual_pages_per_file: int,
     max_clip_pages: int,
 ) -> None:
-    azure_ai_enabled = (
-        orchestration_mode == "semantic-kernel"
-        or mode == "llm"
-        or translator_mode == "auto"
-        or azure_ai_search_mode == "auto"
-        or visual_mode in {"azure", "auto"}
-    )
-    if azure_ai_enabled:
+    if search_mode == "auto" or orchestration_mode == "semantic-kernel":
+        st.warning("⚠️ Azure OpenAI and Vision may be enabled!")
+        return
+
+    if visual_mode in {"azure", "auto"} or visual_prefilter == "clip":
         st.warning("⚠️ Azure OpenAI and Vision are enabled!")
+        return
+
+    if mode == "llm":
+        st.warning("⚠️ Azure OpenAI is enabled!")
 
 
 def estimate_vision_calls(
@@ -835,7 +870,8 @@ def show_agent_steps(response: object) -> None:
 
     with st.expander("Step details"):
         for step in response.steps:
-            st.markdown(f"**{step.name}** · `{step.status}`")
+            display_name = display_step_name(str(step.name))
+            st.markdown(f"**{display_name}** · `{step.status}`")
             st.caption(step.detail)
 
 
@@ -850,23 +886,26 @@ def render_progress_flow(
 
 
 def render_flow_html(steps: list[object], current_step: str | None) -> None:
-    completed = {
-        normalize_flow_step_name(str(step.name))
-        for step in steps
-        if str(step.status).lower() in {"done", "partial", "fallback"}
-    }
+    visible_steps: dict[str, str] = {}
+    for step in steps:
+        step_key = normalize_flow_step_name(str(step.name))
+        if not step_key:
+            continue
+        status = str(step.status).lower()
+        if status in {"done", "partial", "fallback", "deferred"}:
+            visible_steps[step_key] = status
+
     active = normalize_flow_step_name(current_step) if current_step else None
     cards = []
     for step_key, label in FLOW_STEPS:
-        if step_key in completed:
-            state_class = "done"
-            state_label = "done"
-        elif step_key == active:
+        if step_key == active:
             state_class = "current"
             state_label = "current"
+        elif step_key in visible_steps:
+            state_class = "done" if visible_steps[step_key] != "deferred" else "current"
+            state_label = visible_steps[step_key]
         else:
-            state_class = "pending"
-            state_label = "pending"
+            continue
         cards.append(
             "<div class='ads-step "
             + state_class
@@ -883,6 +922,11 @@ def normalize_flow_step_name(name: str | None) -> str | None:
     if not name:
         return None
     return FLOW_ALIASES.get(name, name)
+
+
+def display_step_name(name: str) -> str:
+    normalized = normalize_flow_step_name(name) or name
+    return FLOW_LABELS.get(normalized, name)
 
 
 def render_html(html: str) -> None:

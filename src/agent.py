@@ -58,6 +58,10 @@ from visual import (
     inspect_visuals_for_results,
     missing_vision_config,
 )
+from visual_worker_client import (
+    missing_visual_worker_config,
+    rank_visual_pages_with_worker,
+)
 
 
 VISUAL_CAPABLE_EXTENSIONS = {".pdf"}
@@ -448,17 +452,28 @@ def run_agent(
     emit_progress(steps, step_callback, "CLIP Visual Prefilter")
     if should_run_clip_prefilter(query_understanding, results, visual_prefilter):
         try:
-            clip_evidence, selected_visual_pages = rank_visual_pages_with_clip(
-                query=search_query,
-                results=results,
-                max_files=max_visual_files,
-                max_pages_per_file=max_visual_pages_per_file,
-                top_pages=max_clip_pages,
-                cache_path=clip_cache_path,
-            )
+            if missing_visual_worker_config():
+                clip_evidence, selected_visual_pages = rank_visual_pages_with_clip(
+                    query=search_query,
+                    results=results,
+                    max_files=max_visual_files,
+                    max_pages_per_file=max_visual_pages_per_file,
+                    top_pages=max_clip_pages,
+                    cache_path=clip_cache_path,
+                )
+                evidence_scope = f"{evidence_scope} + local CLIP page prefilter"
+            else:
+                clip_evidence, selected_visual_pages = rank_visual_pages_with_worker(
+                    query=search_query,
+                    results=results,
+                    max_files=max_visual_files,
+                    max_pages_per_file=max_visual_pages_per_file,
+                    top_pages=max_clip_pages,
+                )
+                evidence_scope = f"{evidence_scope} + GPU VM CLIP page prefilter"
+
             apply_clip_evidence(results, clip_evidence)
             results = sorted(results, key=lambda result: result.score, reverse=True)[:top_k]
-            evidence_scope = f"{evidence_scope} + local CLIP page prefilter"
             add_step(steps, make_clip_step(clip_evidence, max_clip_pages), step_callback)
         except RuntimeError as error:
             clip_prefilter_failed = True
@@ -861,13 +876,21 @@ def make_clip_step(
 
 
 def make_clip_error_step(error: str) -> AgentStep:
+    if "GPU CLIP worker" in error or "CLIP_WORKER_URL" in error:
+        detail = (
+            "The GPU CLIP worker could not select visual pages, so visual "
+            f"inspection is waiting for the worker setup. {error}"
+        )
+    else:
+        detail = (
+            "CLIP is not installed in this runtime, so local visual page "
+            "selection is waiting for the optional visual worker/dependency setup."
+        )
+
     return AgentStep(
         name="CLIP Visual Prefilter",
         status="deferred",
-        detail=(
-            "CLIP is not installed in this runtime, so local visual page "
-            "selection is waiting for the optional visual worker/dependency setup."
-        ),
+        detail=detail,
     )
 
 

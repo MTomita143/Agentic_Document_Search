@@ -93,10 +93,10 @@ Run the Streamlit prototype:
 The UI offers four search modes:
 
 ```text
-⚡ Instant   metadata + local text inspection
-🧠 Reasoning instant search + Azure Translator query expansion + Azure OpenAI reranking
+🤖 Auto      Semantic Kernel chooses the search strategy
+🚧 Safety    metadata/path/name search only; no file content inspection
+🧠 Reasoning metadata + content inspection + Azure OpenAI reranking
 👁️ Visual    reasoning search + CLIP prefilter + Azure visual inspection
-🧭 Auto      Semantic Kernel chooses the search strategy
 ```
 
 Above the prompt, the UI has neutral file-type buttons:
@@ -142,6 +142,28 @@ Optional: install the local CLIP visual prefilter:
 CLIP is off by default. Enable it from the UI only when you want local visual
 page ranking. Model files are cached under `indexes/model_cache/huggingface` by
 default instead of your home directory.
+
+Optional: run CLIP on an Azure GPU VM:
+```bash
+cd vm_worker
+python3 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/uvicorn app:app --host 0.0.0.0 --port 8000
+```
+
+Then set these on the App Service:
+```bash
+CLIP_WORKER_URL="http://YOUR-VM-PUBLIC-IP:8000"
+CLIP_WORKER_API_KEY="YOUR-CLIP-WORKER-SECRET"
+CLIP_WORKER_MODEL="clip-ViT-B-32"
+CLIP_WORKER_TIMEOUT_SECONDS="120"
+```
+
+When `CLIP_WORKER_URL` is configured, the app sends candidate Blob names to the
+VM and receives selected page numbers back. Azure Vision then inspects only
+those selected pages. If the worker URL is unset, the app uses the local CLIP
+runtime when it is installed.
 
 The agent flow currently shows:
 
@@ -210,6 +232,10 @@ AZURE_AI_SEARCH_QUERY_TYPE="simple"
 AZURE_AI_SEARCH_SELECT_FIELDS="file_id,uri,relative_path,filename,title,content"
 
 AZURE_BLOB_CONTAINER_URL="https://YOUR-STORAGE-ACCOUNT.blob.core.windows.net/YOUR-CONTAINER?YOUR-SAS"
+CLIP_WORKER_URL="http://YOUR-VM-PUBLIC-IP:8000"
+CLIP_WORKER_API_KEY="YOUR-CLIP-WORKER-SECRET"
+CLIP_WORKER_MODEL="clip-ViT-B-32"
+CLIP_WORKER_TIMEOUT_SECONDS="120"
 # Optional Azure App Service override. Leave unset locally.
 # ADS_RUNTIME_DIR="/home/agentic-document-search"
 ADS_LOCAL_DATA_DIR="data/raw"
