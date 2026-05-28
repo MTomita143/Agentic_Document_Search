@@ -60,6 +60,9 @@ from visual import (
 )
 
 
+VISUAL_CAPABLE_EXTENSIONS = {".pdf"}
+TEXT_HEAVY_EXTENSIONS = {".doc", ".docx", ".xls", ".xlsm", ".xlsx"}
+
 VISUAL_TERMS = {
     "グラフ",
     "スクショ",
@@ -197,6 +200,45 @@ def collect_clues(
     return clues
 
 
+def filter_records_by_extension(
+    records: list[dict[str, Any]],
+    allowed_extensions: set[str] | None,
+) -> list[dict[str, Any]]:
+    if allowed_extensions is None:
+        return records
+
+    normalized_extensions = normalize_extensions(allowed_extensions)
+    return [
+        record
+        for record in records
+        if str(record.get("extension", "")).lower() in normalized_extensions
+    ]
+
+
+def normalize_extensions(extensions: set[str]) -> set[str]:
+    return {
+        extension if extension.startswith(".") else f".{extension}"
+        for extension in (value.lower() for value in extensions)
+    }
+
+
+def selected_extensions_support_visuals(
+    allowed_extensions: set[str] | None,
+) -> bool:
+    if allowed_extensions is None:
+        return True
+    return bool(normalize_extensions(allowed_extensions) & VISUAL_CAPABLE_EXTENSIONS)
+
+
+def selected_extensions_are_text_heavy(
+    allowed_extensions: set[str] | None,
+) -> bool:
+    if not allowed_extensions:
+        return False
+    normalized_extensions = normalize_extensions(allowed_extensions)
+    return normalized_extensions <= TEXT_HEAVY_EXTENSIONS
+
+
 def run_agent(
     query: str,
     index_path: Path,
@@ -219,9 +261,13 @@ def run_agent(
     orchestration_mode: str = "manual",
     azure_ai_search_mode: str = "never",
     search_memory_path: Path = DEFAULT_SEARCH_MEMORY_PATH,
+    allowed_extensions: set[str] | None = None,
 ) -> AgentResponse:
     records = load_index(index_path)
     steps: list[AgentStep] = []
+    records = filter_records_by_extension(records, allowed_extensions)
+    if allowed_extensions is not None:
+        steps.append(make_file_type_filter_step(records, allowed_extensions))
 
     if orchestration_mode == "semantic-kernel":
         strategy_plan = plan_search_strategy(
@@ -235,6 +281,16 @@ def run_agent(
         visual_prefilter = strategy_plan.visual_prefilter
         azure_ai_search_mode = strategy_plan.azure_ai_search_mode
         steps.append(make_strategy_step(strategy_plan))
+
+    if not selected_extensions_support_visuals(allowed_extensions):
+        visual_mode = "never"
+        visual_prefilter = "none"
+    if (
+        orchestration_mode == "semantic-kernel"
+        and selected_extensions_are_text_heavy(allowed_extensions)
+    ):
+        mode = "llm"
+        content_mode = "auto"
 
     if mode == "llm" and candidate_pool_size < top_k:
         candidate_pool_size = top_k
@@ -261,7 +317,7 @@ def run_agent(
         )
     )
 
-    if mode == "local":
+    if mode == "local" or not records:
         results = search_local(search_query, records, top_k=top_k)
         evidence_scope = "metadata only"
         steps.append(
@@ -275,24 +331,38 @@ def run_agent(
             )
         )
     else:
-        results = search_llm(
-            search_query,
-            records,
-            top_k=top_k,
-            candidate_pool_size=candidate_pool_size,
-        )
-        evidence_scope = "metadata only with Azure OpenAI reranking"
-        steps.append(
-            AgentStep(
-                name="Metadata Search + LLM Rerank",
-                status="done",
-                detail=(
-                    f"Used local metadata search to create a candidate pool, "
-                    f"then reranked metadata only with Azure OpenAI. Returned "
-                    f"top {len(results)}."
-                ),
+        try:
+            results = search_llm(
+                search_query,
+                records,
+                top_k=top_k,
+                candidate_pool_size=candidate_pool_size,
             )
-        )
+            evidence_scope = "metadata only with Azure OpenAI reranking"
+            steps.append(
+                AgentStep(
+                    name="Metadata Search + LLM Rerank",
+                    status="done",
+                    detail=(
+                        f"Used local metadata search to create a candidate pool, "
+                        f"then reranked metadata only with Azure OpenAI. Returned "
+                        f"top {len(results)}."
+                    ),
+                )
+            )
+        except Exception as error:
+            results = search_local(search_query, records, top_k=top_k)
+            evidence_scope = "metadata only"
+            steps.append(
+                AgentStep(
+                    name="Metadata Search + LLM Rerank",
+                    status="deferred",
+                    detail=(
+                        "Azure OpenAI reranking could not run, so the agent used "
+                        f"local metadata search instead. {error}"
+                    ),
+                )
+            )
 
     memory_candidates = find_memory_candidates(
         query=search_query,
@@ -394,6 +464,7 @@ def run_agent(
     elif query_understanding.should_inspect_visuals:
         steps.append(make_visual_skipped_step(visual_mode))
 
+    results = sorted(results, key=lambda result: result.score, reverse=True)[:top_k]
     normalize_result_scores(results)
     steps.append(make_answer_step(results))
     remember_search(query, results, search_memory_path)
@@ -467,6 +538,18 @@ def make_strategy_step(strategy_plan: SearchStrategyPlan) -> AgentStep:
         name="Semantic Kernel Auto Mode",
         status=status,
         detail=detail,
+    )
+
+
+def make_file_type_filter_step(
+    records: list[dict[str, Any]],
+    allowed_extensions: set[str],
+) -> AgentStep:
+    extensions = ", ".join(sorted(normalize_extensions(allowed_extensions)))
+    return AgentStep(
+        name="File Type Filter",
+        status="done",
+        detail=f"Limited search to {len(records)} files with extensions: {extensions}.",
     )
 
 
@@ -1141,6 +1224,12 @@ def main() -> None:
         help="Path to the generated search memory cache.",
     )
     parser.add_argument(
+        "--extension",
+        action="append",
+        dest="extensions",
+        help="Limit search to an extension. Repeat for multiple extensions, e.g. --extension .pdf --extension .pptx.",
+    )
+    parser.add_argument(
         "--json",
         action="store_true",
         help="Print machine-readable JSON output.",
@@ -1171,6 +1260,7 @@ def main() -> None:
         orchestration_mode=args.orchestration_mode,
         azure_ai_search_mode=args.azure_ai_search_mode,
         search_memory_path=args.search_memory_cache,
+        allowed_extensions=set(args.extensions) if args.extensions else None,
     )
 
     if args.json:

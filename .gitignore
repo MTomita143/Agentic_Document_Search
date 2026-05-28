@@ -13,6 +13,7 @@ data/raw/*
 indexes/*.json
 indexes/model_cache/
 indexes/blob_cache/
+indexes/page_previews/
 
 # OS
 .DS_Store

@@ -88,7 +88,6 @@ FIELD_WEIGHTS = {
     "grandparent_folder": 2,
     "type_label": 2,
     "extension": 1,
-    "file_size_label": 1,
 }
 
 STOPWORDS = {
@@ -585,9 +584,6 @@ def rerank_with_azure_openai(
                                     "grandparent_folder"
                                 ),
                                 "type_label": candidate.record.get("type_label"),
-                                "file_size_label": candidate.record.get(
-                                    "file_size_label"
-                                ),
                                 "local_score": candidate.score,
                                 "local_reasons": candidate.reasons,
                             }

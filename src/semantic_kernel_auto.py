@@ -99,7 +99,7 @@ def plan_search_strategy(
 ) -> SearchStrategyPlan:
     try:
         return asyncio.run(plan_with_semantic_kernel(query, azure_ai_search_available))
-    except RuntimeError as error:
+    except Exception as error:
         fallback = deterministic_plan(query, azure_ai_search_available)
         fallback.error = str(error)
         return fallback

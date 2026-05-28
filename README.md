@@ -59,6 +59,9 @@ Filename, extension, parent folders, type label, display size, and local paths
 are derived at load time. This keeps the index portable when the source moves
 from a local folder to Azure Blob Storage.
 
+File size is kept only for display and cache invalidation. It is not used as a
+ranking signal because it is usually a weak reason for human-memory search.
+
 Optional Azure Blob ingestion:
 ```bash
 .venv/bin/python src/ingest.py \
@@ -77,12 +80,17 @@ Run the visible agent flow:
 python3 src/agent.py --query "find the investor presentation deck" --mode local
 ```
 
+Limit search by extension:
+```bash
+python3 src/agent.py --query "find the investor presentation deck" --extension .pdf
+```
+
 Run the Streamlit prototype:
 ```bash
 .venv/bin/streamlit run src/ui.py
 ```
 
-The UI offers three search modes:
+The UI offers four search modes:
 
 ```text
 ⚡ Instant   metadata + local text inspection
@@ -90,6 +98,23 @@ The UI offers three search modes:
 👁️ Visual    reasoning search + CLIP prefilter + Azure visual inspection
 🧭 Auto      Semantic Kernel chooses the search strategy
 ```
+
+Above the prompt, the UI has neutral file-type buttons:
+
+```text
+Excel | Word | PowerPoint | PDF
+```
+
+They filter the candidate set before search. PDF selections can use the current
+visual page verifier. PowerPoint is treated as slide-like for mode selection;
+native PPTX visual rendering belongs in the VM rendering worker. Word/Excel-only
+searches skip visual inspection and rely on text inspection plus reasoning. The
+buttons intentionally avoid Microsoft product logos; they use plain labels and
+simple symbols.
+
+The sidebar has an index refresh control. Refresh after files are added,
+deleted, renamed, or moved. Local refresh scans `data/raw`. Azure Blob refresh
+appears when `AZURE_BLOB_CONTAINER_URL` is configured.
 
 Open `⚙️ Customize mode` in the sidebar to override text inspection, Azure
 Translator, Azure AI Search, LLM usage, 📎 CLIP prefiltering, Azure visual
@@ -117,6 +142,7 @@ The agent flow currently shows:
 ```text
 optional Semantic Kernel auto-mode planning
 → optionally expand Japanese queries with Azure Translator
+→ filter by selected file types
 → understand query
 → search English/Japanese/mixed metadata
 → optionally recall related previous searches from search memory
@@ -255,7 +281,10 @@ Semantic Kernel
   Auto mode chooses search strategy and tool sequence
 
 Azure Blob Storage
-  Stores the source company-drive documents
+  Stores demo source documents and supports cloud deployment
+
+Microsoft Graph / OneDrive / SharePoint
+  Enterprise source-of-truth integration for company documents
 
 Azure VM
   Hosts heavier local workers for CLIP, OCR, and PDF/page rendering
@@ -276,6 +305,30 @@ Azure AI Search
 The differentiation from Azure AI Search is the agentic loop. Azure AI Search
 can retrieve candidates, but this app decides when to search metadata, remember
 past searches, inspect text, inspect visuals, or stop early.
+
+## Business Narrative
+
+Many companies already require documents to live in approved cloud storage such
+as OneDrive or SharePoint. The product value is not "upload everything to a new
+AI database." The value is a policy-aware search agent that can investigate
+approved document locations with the minimum necessary computation.
+
+The app supports three trust levels:
+
+```text
+No-LLM mode
+  metadata + local text extraction + cached evidence
+
+Tenant AI mode
+  Azure OpenAI/Foundry inside the company's Azure environment
+
+Visual mode
+  selected page rendering + CLIP/Azure Vision only after candidate narrowing
+```
+
+This lets strict organizations still get useful search without sending every
+document through an LLM. Teams with approved Azure AI policies can enable deeper
+reasoning and visual verification.
 
 ## Data Efficiency
 
@@ -320,6 +373,7 @@ adding permanent visual labels to every document.
 - [x] Add optional local CLIP page prefilter
 - [x] Wire Azure Vision analysis for selected candidate pages
 - [x] Add Azure Blob-ready document source and lazy blob download cache
+- [x] Add selected PDF page preview in Streamlit results
 - [ ] Add robust visual labels such as graph, table, blue theme, layout type
 - [ ] Search using visual memory queries
 

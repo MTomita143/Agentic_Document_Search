@@ -7,16 +7,44 @@ Run locally:
 
 from __future__ import annotations
 
+import os
+import re
 import sys
 from pathlib import Path
 
 import streamlit as st
 
 from agent import run_agent
+from document_store import resolve_document_path
+from ingest import collect_azure_blob_metadata, collect_file_metadata, save_json
 from search import DEFAULT_INDEX_PATH, load_environment
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+FILE_TYPE_CHOICES = {
+    "excel": {
+        "label": "Excel",
+        "icon": "▦",
+        "extensions": {".xlsx", ".xlsm", ".xls"},
+    },
+    "word": {
+        "label": "Word",
+        "icon": "□",
+        "extensions": {".docx", ".doc"},
+    },
+    "powerpoint": {
+        "label": "PowerPoint",
+        "icon": "▣",
+        "extensions": {".pptx", ".ppt"},
+    },
+    "pdf": {
+        "label": "PDF",
+        "icon": "▤",
+        "extensions": {".pdf"},
+    },
+}
+VISUAL_FILE_TYPE_KEYS = {"pdf"}
+TEXT_HEAVY_FILE_TYPE_KEYS = {"excel", "word"}
 
 
 def main() -> None:
@@ -26,6 +54,9 @@ def main() -> None:
     st.title("Agentic Document Search")
     st.caption("Find documents the way you remember them.")
 
+    selected_file_types = render_file_type_buttons()
+    selected_extensions = extensions_for_file_types(selected_file_types)
+
     query = st.text_input(
         "What do you remember?",
         placeholder="Example: I remember a slide with a blue graph",
@@ -33,6 +64,7 @@ def main() -> None:
 
     with st.sidebar:
         st.header("Search Settings")
+        render_index_controls()
 
         search_mode = st.radio(
             "Search mode",
@@ -172,6 +204,18 @@ def main() -> None:
             "semantic-kernel" if search_mode == "auto" else "manual"
         )
 
+        if search_mode in {"auto", "visual"} and selected_file_types <= TEXT_HEAVY_FILE_TYPE_KEYS:
+            mode = "llm"
+            visual_mode = "never"
+            visual_prefilter = "none"
+            st.caption(
+                "Word/Excel-only search uses reasoning over extracted text and skips visual inspection."
+            )
+        elif not selected_file_types & VISUAL_FILE_TYPE_KEYS:
+            visual_mode = "never"
+            visual_prefilter = "none"
+            st.caption("Visual inspection is skipped because no visual-friendly file type is selected.")
+
     show_cost_notice(
         orchestration_mode,
         mode,
@@ -186,13 +230,14 @@ def main() -> None:
 
     search_clicked = st.button("Search", type="primary")
 
+    if not selected_file_types:
+        st.warning("Choose at least one file type.")
+        return
+
     if not query:
         if search_clicked:
             st.warning("Enter a search memory first.")
         show_empty_state()
-        return
-
-    if not search_clicked:
         return
 
     index_path = PROJECT_ROOT / DEFAULT_INDEX_PATH
@@ -200,6 +245,10 @@ def main() -> None:
     visual_cache_path = PROJECT_ROOT / "indexes/visual_cache.json"
     clip_cache_path = PROJECT_ROOT / "indexes/clip_visual_cache.json"
     search_memory_path = PROJECT_ROOT / "indexes/search_memory.json"
+
+    if not search_clicked:
+        show_cached_response()
+        return
 
     with st.spinner("Running agentic search..."):
         try:
@@ -225,13 +274,119 @@ def main() -> None:
                 orchestration_mode=orchestration_mode,
                 azure_ai_search_mode=azure_ai_search_mode,
                 search_memory_path=search_memory_path,
+                allowed_extensions=selected_extensions,
             )
         except Exception as error:
             st.error(str(error))
             return
 
+    st.session_state.last_response = response
+    st.session_state.last_query = query
     show_agent_steps(response)
     show_results(response)
+
+
+def show_cached_response() -> None:
+    response = st.session_state.get("last_response")
+    if not response:
+        return
+
+    st.caption(f"Showing previous result for: {st.session_state.get('last_query', '')}")
+    show_agent_steps(response)
+    show_results(response)
+
+
+def render_file_type_buttons() -> set[str]:
+    st.caption("File type")
+    if "selected_file_types" not in st.session_state:
+        st.session_state.selected_file_types = list(FILE_TYPE_CHOICES)
+
+    selected = set(st.session_state.selected_file_types)
+    columns = st.columns(4)
+    for column, (file_type, config) in zip(columns, FILE_TYPE_CHOICES.items()):
+        is_selected = file_type in selected
+        button_label = f"{config['icon']} {config['label']}"
+        with column:
+            clicked = st.button(
+                button_label,
+                key=f"file_type_{file_type}",
+                use_container_width=True,
+                type="primary" if is_selected else "secondary",
+            )
+        if clicked:
+            if is_selected and len(selected) > 1:
+                selected.remove(file_type)
+            elif not is_selected:
+                selected.add(file_type)
+            st.session_state.selected_file_types = [
+                key
+                for key in FILE_TYPE_CHOICES
+                if key in selected
+            ]
+            rerun()
+
+    return selected
+
+
+def extensions_for_file_types(file_types: set[str]) -> set[str]:
+    extensions: set[str] = set()
+    for file_type in file_types:
+        extensions.update(FILE_TYPE_CHOICES[file_type]["extensions"])
+    return extensions
+
+
+def rerun() -> None:
+    if hasattr(st, "rerun"):
+        st.rerun()
+    else:
+        st.experimental_rerun()
+
+
+def render_index_controls() -> None:
+    with st.expander("🗂️ Index"):
+        st.caption(
+            "Refresh after documents are added, deleted, renamed, or moved."
+        )
+        local_clicked = st.button(
+            "Refresh local index",
+            use_container_width=True,
+        )
+        if local_clicked:
+            refresh_local_index()
+
+        if os.getenv("AZURE_BLOB_CONTAINER_URL"):
+            blob_clicked = st.button(
+                "Refresh Azure Blob index",
+                use_container_width=True,
+            )
+            if blob_clicked:
+                refresh_blob_index()
+
+
+def refresh_local_index() -> None:
+    data_dir = PROJECT_ROOT / "data/raw"
+    index_path = PROJECT_ROOT / DEFAULT_INDEX_PATH
+    try:
+        records = collect_file_metadata(data_dir)
+        save_json(records, index_path)
+    except Exception as error:
+        st.error(f"Could not refresh local index: {error}")
+        return
+
+    st.success(f"Refreshed local index with {len(records)} files.")
+
+
+def refresh_blob_index() -> None:
+    container_url = os.getenv("AZURE_BLOB_CONTAINER_URL", "")
+    index_path = PROJECT_ROOT / DEFAULT_INDEX_PATH
+    try:
+        records = collect_azure_blob_metadata(container_url)
+        save_json(records, index_path)
+    except Exception as error:
+        st.error(f"Could not refresh Azure Blob index: {error}")
+        return
+
+    st.success(f"Refreshed Azure Blob index with {len(records)} files.")
 
 
 def configure_page() -> None:
@@ -431,6 +586,94 @@ def show_results(response: object) -> None:
             st.markdown("**Why this matched**")
             for reason in result.reasons:
                 st.write(f"- {reason}")
+
+            show_page_preview(result)
+
+
+def show_page_preview(result: object) -> None:
+    record = result.record
+    if str(record.get("extension", "")).lower() != ".pdf":
+        return
+
+    preview_pages = extract_preview_pages(result.reasons)
+    preview_label = (
+        "Show selected page"
+        if preview_pages != [1]
+        else "Show first page"
+    )
+    key = f"preview_{record.get('file_id')}"
+    if st.button(preview_label, key=key):
+        st.session_state[f"{key}_visible"] = not st.session_state.get(
+            f"{key}_visible",
+            False,
+        )
+
+    if not st.session_state.get(f"{key}_visible", False):
+        return
+
+    try:
+        image_paths = render_preview_pages(record, preview_pages[:2])
+    except Exception as error:
+        st.warning(f"Could not render preview: {error}")
+        return
+
+    for image_path, page_number in image_paths:
+        st.image(
+            str(image_path),
+            caption=f"Page {page_number}",
+            use_container_width=True,
+        )
+
+
+def extract_preview_pages(reasons: list[str]) -> list[int]:
+    pages: list[int] = []
+    for reason in reasons:
+        if "CLIP selected visual pages:" in reason:
+            pages.extend(int(value) for value in re.findall(r"\d+", reason))
+        else:
+            pages.extend(
+                int(value)
+                for value in re.findall(r"\bpage\s+(\d+)\b", reason, flags=re.IGNORECASE)
+            )
+
+    unique_pages = []
+    for page in pages:
+        if page not in unique_pages and page > 0:
+            unique_pages.append(page)
+
+    return unique_pages or [1]
+
+
+def render_preview_pages(
+    record: dict[str, object],
+    page_numbers: list[int],
+) -> list[tuple[Path, int]]:
+    try:
+        import fitz
+    except ImportError as error:
+        raise RuntimeError("PDF preview needs PyMuPDF from requirements.txt") from error
+
+    source_path = resolve_document_path(record)
+    preview_dir = PROJECT_ROOT / "indexes/page_previews"
+    preview_dir.mkdir(parents=True, exist_ok=True)
+    output: list[tuple[Path, int]] = []
+
+    with fitz.open(source_path) as document:
+        for page_number in page_numbers:
+            if page_number < 1 or page_number > document.page_count:
+                continue
+
+            image_path = (
+                preview_dir
+                / f"{record.get('file_id')}-page-{page_number}.png"
+            )
+            if not image_path.exists():
+                page = document.load_page(page_number - 1)
+                pixmap = page.get_pixmap(matrix=fitz.Matrix(1.4, 1.4), alpha=False)
+                pixmap.save(image_path)
+            output.append((image_path, page_number))
+
+    return output
 
 
 if __name__ == "__main__":
