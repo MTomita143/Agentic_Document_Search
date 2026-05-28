@@ -763,9 +763,9 @@ def make_content_step(content_evidence: list[ContentEvidence]) -> AgentStep:
             name="Inspect Content",
             status="partial",
             detail=(
-                f"Inspected {inspected_files} candidate files and {inspected_pages} "
-                f"content units. {matched_files} files had text matches. "
-                f"{cache_hits} cache hits. Some files were skipped: {'; '.join(errors)}."
+                f"Read text from {inspected_files} candidate files. "
+                f"{matched_files} files had matching text. "
+                f"Some files were skipped: {'; '.join(errors)}."
                 f"{ocr_detail}"
             ),
         )
@@ -774,9 +774,9 @@ def make_content_step(content_evidence: list[ContentEvidence]) -> AgentStep:
         name="Inspect Content",
         status="done",
         detail=(
-            f"Inspected {inspected_files} candidate files and {inspected_pages} "
-            f"content units. {matched_files} files had text matches. "
-            f"{cache_hits} cache hits.{ocr_detail}"
+            f"Read text from {inspected_files} candidate files across "
+            f"{inspected_pages} pages/slides/sheets. {matched_files} files had "
+            f"matching text.{ocr_detail}"
         ),
     )
 
@@ -796,10 +796,7 @@ def make_clip_step(
             name="CLIP Visual Prefilter",
             status="partial",
             detail=(
-                f"Ranked rendered pages locally with CLIP. Selected "
-                f"{selected_pages} of at most {max_clip_pages} pages for visual "
-                f"verification. Rendered {rendered_pages} pages across "
-                f"{rendered_files} files, with {cache_hits} embedding cache hits. "
+                f"Selected likely visual pages with CLIP before Azure Vision. "
                 f"Some files were skipped: {'; '.join(errors)}."
             ),
         )
@@ -808,10 +805,8 @@ def make_clip_step(
         name="CLIP Visual Prefilter",
         status="done",
         detail=(
-            f"Ranked rendered pages locally with CLIP. Selected {selected_pages} "
-            f"of at most {max_clip_pages} pages for visual verification. "
-            f"Rendered {rendered_pages} pages across {rendered_files} files, "
-            f"with {cache_hits} embedding cache hits."
+            f"Selected {selected_pages} likely visual pages from "
+            f"{rendered_files} candidate files before Azure Vision."
         ),
     )
 
@@ -820,7 +815,10 @@ def make_clip_error_step(error: str) -> AgentStep:
     return AgentStep(
         name="CLIP Visual Prefilter",
         status="deferred",
-        detail=error,
+        detail=(
+            "CLIP is not installed in this runtime, so local visual page "
+            "selection is waiting for the optional visual worker/dependency setup."
+        ),
     )
 
 
@@ -847,9 +845,8 @@ def make_visual_step(visual_evidence: list[VisualEvidence]) -> AgentStep:
             name="Inspect Visuals",
             status="partial",
             detail=(
-                f"Analyzed {analyzed_files} files and {analyzed_pages} pages with "
-                f"Azure Vision. {matched_files} files had visual matches. "
-                f"{azure_calls} Azure calls, {cache_hits} cache hits. "
+                f"Checked selected pages with Azure Vision. "
+                f"{matched_files} files had visual matches. "
                 f"Some files were skipped: {'; '.join(errors)}."
             ),
         )
@@ -858,9 +855,8 @@ def make_visual_step(visual_evidence: list[VisualEvidence]) -> AgentStep:
         name="Inspect Visuals",
         status="done",
         detail=(
-            f"Analyzed {analyzed_files} files and {analyzed_pages} rendered pages "
-            f"with Azure Vision. {matched_files} files had visual matches. "
-            f"{azure_calls} Azure calls, {cache_hits} cache hits."
+            f"Checked selected pages from {analyzed_files} files with Azure Vision. "
+            f"{matched_files} files had visual matches."
         ),
     )
 
@@ -870,9 +866,8 @@ def make_visual_blocked_by_clip_step() -> AgentStep:
         name="Inspect Visuals",
         status="skipped",
         detail=(
-            "Azure Vision was not run because CLIP prefilter was selected but "
-            "could not run. This avoids sending unfiltered pages to a billable "
-            "visual verifier."
+            "Azure Vision was skipped because CLIP page selection was unavailable. "
+            "This avoids billable analysis of broad, unfiltered pages."
         ),
     )
 
@@ -972,22 +967,16 @@ def apply_clip_evidence(
             continue
 
         if evidence.error:
-            result.reasons.append(evidence.error)
             continue
 
         if evidence.score <= 0:
-            result.reasons.append(
-                f"CLIP ranked {evidence.rendered_pages} rendered pages; no selected page improved the match"
-            )
             continue
 
         result.score += evidence.score
         result.reasons.append(
-            "CLIP selected visual pages: "
+            "Visual page candidates: "
             + ", ".join(str(page) for page in evidence.selected_pages)
         )
-        for observation in evidence.observations:
-            result.reasons.append("CLIP observation " + observation)
 
 
 def apply_visual_evidence(
@@ -1010,16 +999,13 @@ def apply_visual_evidence(
             continue
 
         if evidence.score <= 0:
-            result.reasons.append(
-                f"analyzed {evidence.analyzed_pages} rendered pages with Azure Vision; no visual query terms matched"
-            )
             continue
 
         result.score += evidence.score
         result.reasons.append(
-            "visual analysis matched terms: " + ", ".join(evidence.matched_terms)
+            "Visual analysis matched: " + ", ".join(evidence.matched_terms)
         )
-        for observation in evidence.observations:
+        for observation in evidence.observations[:2]:
             result.reasons.append("visual observation " + observation)
 
 

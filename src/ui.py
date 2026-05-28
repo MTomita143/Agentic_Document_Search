@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+from html import escape
 from pathlib import Path
 
 import streamlit as st
@@ -26,21 +27,25 @@ FILE_TYPE_CHOICES = {
     "excel": {
         "label": "Excel",
         "icon": "▦",
+        "accent": "#16833a",
         "extensions": {".xlsx", ".xlsm", ".xls"},
     },
     "word": {
         "label": "Word",
         "icon": "□",
+        "accent": "#2563eb",
         "extensions": {".docx", ".doc"},
     },
     "powerpoint": {
         "label": "PowerPoint",
         "icon": "▣",
+        "accent": "#ea580c",
         "extensions": {".pptx", ".ppt"},
     },
     "pdf": {
         "label": "PDF",
         "icon": "▤",
+        "accent": "#dc2626",
         "extensions": {".pdf"},
     },
 }
@@ -53,6 +58,7 @@ def main() -> None:
     runtime_root = resolve_runtime_root()
     configure_runtime_environment(runtime_root)
     configure_page()
+    inject_ui_styles()
 
     st.title("Agentic Document Search")
     st.caption("Find documents the way you remember them.")
@@ -154,7 +160,7 @@ def main() -> None:
             max_pages_per_file = st.slider(
                 "Text pages per file",
                 1,
-                200,
+                300,
                 settings["max_pages_per_file"],
                 key=f"{search_mode}_max_pages_per_file",
             )
@@ -267,7 +273,7 @@ def main() -> None:
                 translator_mode=translator_mode,
                 max_inspected_files=max_inspected_files,
                 max_pages_per_file=max_pages_per_file,
-                max_chars_per_file=30000,
+                max_chars_per_file=200000,
                 content_cache_path=content_cache_path,
                 visual_mode=visual_mode,
                 visual_prefilter=visual_prefilter,
@@ -307,28 +313,29 @@ def render_file_type_buttons() -> set[str]:
         st.session_state.selected_file_types = list(FILE_TYPE_CHOICES)
 
     selected = set(st.session_state.selected_file_types)
-    columns = st.columns(4)
-    for column, (file_type, config) in zip(columns, FILE_TYPE_CHOICES.items()):
-        is_selected = file_type in selected
-        button_label = f"{config['icon']} {config['label']}"
-        with column:
-            clicked = st.button(
-                button_label,
-                key=f"file_type_{file_type}",
-                use_container_width=True,
-                type="primary" if is_selected else "secondary",
-            )
-        if clicked:
-            if is_selected and len(selected) > 1:
-                selected.remove(file_type)
-            elif not is_selected:
-                selected.add(file_type)
-            st.session_state.selected_file_types = [
-                key
-                for key in FILE_TYPE_CHOICES
-                if key in selected
-            ]
-            rerun()
+    with st.container(key="file_type_filter"):
+        columns = st.columns(4)
+        for column, (file_type, config) in zip(columns, FILE_TYPE_CHOICES.items()):
+            is_selected = file_type in selected
+            button_label = f"{config['icon']} {config['label']}"
+            with column:
+                clicked = st.button(
+                    button_label,
+                    key=f"file_type_{file_type}",
+                    use_container_width=True,
+                    type="primary" if is_selected else "secondary",
+                )
+            if clicked:
+                if is_selected and len(selected) > 1:
+                    selected.remove(file_type)
+                elif not is_selected:
+                    selected.add(file_type)
+                st.session_state.selected_file_types = [
+                    key
+                    for key in FILE_TYPE_CHOICES
+                    if key in selected
+                ]
+                rerun()
 
     return selected
 
@@ -479,6 +486,159 @@ def configure_page() -> None:
     )
 
 
+def inject_ui_styles() -> None:
+    st.markdown(
+        """
+        <style>
+        :root {
+            --ads-blue: #3b82f6;
+            --ads-blue-soft: #dbeafe;
+            --ads-ink: #111827;
+            --ads-muted: #6b7280;
+            --ads-border: #d1d5db;
+        }
+
+        div[data-testid="stMetric"] {
+            display: none;
+        }
+
+        .st-key-file_type_excel button,
+        .st-key-file_type_word button,
+        .st-key-file_type_powerpoint button,
+        .st-key-file_type_pdf button {
+            min-height: 3.4rem;
+            border-radius: 8px;
+            background: white;
+            font-weight: 750;
+            box-shadow: none;
+        }
+
+        .st-key-file_type_excel button {
+            border: 1.5px solid #16833a;
+            color: #16833a;
+        }
+        .st-key-file_type_word button {
+            border: 1.5px solid #2563eb;
+            color: #2563eb;
+        }
+        .st-key-file_type_powerpoint button {
+            border: 1.5px solid #ea580c;
+            color: #ea580c;
+        }
+        .st-key-file_type_pdf button {
+            border: 1.5px solid #dc2626;
+            color: #dc2626;
+        }
+
+        .st-key-file_type_excel button[kind="primary"] {
+            background: #16833a;
+            color: white;
+        }
+        .st-key-file_type_word button[kind="primary"] {
+            background: #2563eb;
+            color: white;
+        }
+        .st-key-file_type_powerpoint button[kind="primary"] {
+            background: #ea580c;
+            color: white;
+        }
+        .st-key-file_type_pdf button[kind="primary"] {
+            background: #dc2626;
+            color: white;
+        }
+
+        .ads-flow {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+            gap: 0.55rem;
+            margin: 0.35rem 0 1rem;
+        }
+
+        .ads-step {
+            border: 1px solid var(--ads-border);
+            border-radius: 8px;
+            padding: 0.7rem 0.8rem;
+            min-height: 4.2rem;
+            background: white;
+        }
+
+        .ads-step.done {
+            background: var(--ads-blue-soft);
+            border-color: #93c5fd;
+        }
+
+        .ads-step.active,
+        .ads-step.partial,
+        .ads-step.deferred {
+            background: #fff7ed;
+            border-color: #fdba74;
+        }
+
+        .ads-step.skipped,
+        .ads-step.not-needed-yet {
+            color: var(--ads-muted);
+            background: white;
+            border-style: dashed;
+        }
+
+        .ads-step-name {
+            font-size: 0.82rem;
+            font-weight: 750;
+            line-height: 1.15;
+        }
+
+        .ads-step-status {
+            margin-top: 0.35rem;
+            font-size: 0.72rem;
+            color: var(--ads-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.02em;
+        }
+
+        .ads-score-wrap {
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            height: 100%;
+        }
+
+        .ads-score-ring {
+            --score: 0;
+            --score-color: #ef4444;
+            width: 76px;
+            aspect-ratio: 1;
+            border-radius: 50%;
+            background:
+                radial-gradient(closest-side, white 70%, transparent 72%),
+                conic-gradient(var(--score-color) calc(var(--score) * 1%), #e5e7eb 0);
+            display: grid;
+            place-items: center;
+            color: var(--ads-ink);
+            font-weight: 800;
+            font-size: 1.05rem;
+        }
+
+        .ads-score-caption {
+            text-align: center;
+            color: var(--ads-muted);
+            font-size: 0.72rem;
+            margin-top: 0.25rem;
+        }
+
+        .ads-reasons {
+            margin: 0.2rem 0 0.75rem;
+            padding-left: 1.1rem;
+        }
+
+        .ads-reasons li {
+            margin: 0.2rem 0;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def format_search_mode(value: str) -> str:
     return {
         "instant": "⚡ Instant",
@@ -508,7 +668,7 @@ def preset_settings(value: str) -> dict[str, object]:
             "visual_prefilter": "none",
             "candidate_pool_size": 6,
             "max_inspected_files": 6,
-            "max_pages_per_file": 50,
+            "max_pages_per_file": 200,
             "max_visual_files": 3,
             "max_visual_pages_per_file": 5,
             "max_clip_pages": 10,
@@ -522,7 +682,7 @@ def preset_settings(value: str) -> dict[str, object]:
             "visual_prefilter": "none",
             "candidate_pool_size": 6,
             "max_inspected_files": 6,
-            "max_pages_per_file": 50,
+            "max_pages_per_file": 200,
             "max_visual_files": 3,
             "max_visual_pages_per_file": 5,
             "max_clip_pages": 10,
@@ -536,7 +696,7 @@ def preset_settings(value: str) -> dict[str, object]:
             "visual_prefilter": "clip",
             "candidate_pool_size": 6,
             "max_inspected_files": 6,
-            "max_pages_per_file": 50,
+            "max_pages_per_file": 200,
             "max_visual_files": 3,
             "max_visual_pages_per_file": 5,
             "max_clip_pages": 10,
@@ -550,7 +710,7 @@ def preset_settings(value: str) -> dict[str, object]:
             "visual_prefilter": "none",
             "candidate_pool_size": 6,
             "max_inspected_files": 6,
-            "max_pages_per_file": 50,
+            "max_pages_per_file": 200,
             "max_visual_files": 3,
             "max_visual_pages_per_file": 5,
             "max_clip_pages": 10,
@@ -639,11 +799,31 @@ def estimate_vision_calls(
 
 
 def show_agent_steps(response: object) -> None:
-    st.subheader("Agent Steps")
+    st.subheader("Agent Flow")
+    step_cards = []
     for step in response.steps:
-        with st.container(border=True):
+        status_class = css_class_for_status(step.status)
+        step_cards.append(
+            f"""
+            <div class="ads-step {status_class}">
+                <div class="ads-step-name">{escape(step.name)}</div>
+                <div class="ads-step-status">{escape(step.status)}</div>
+            </div>
+            """
+        )
+    st.markdown(
+        '<div class="ads-flow">' + "\n".join(step_cards) + "</div>",
+        unsafe_allow_html=True,
+    )
+
+    with st.expander("Step details"):
+        for step in response.steps:
             st.markdown(f"**{step.name}** · `{step.status}`")
-            st.write(step.detail)
+            st.caption(step.detail)
+
+
+def css_class_for_status(status: str) -> str:
+    return status.lower().replace(" ", "-")
 
 
 def show_results(response: object) -> None:
@@ -663,13 +843,191 @@ def show_results(response: object) -> None:
                     f"{record.get('type_label')} · {record.get('file_size_label', 'unknown')}"
                 )
             with col_score:
-                st.metric("Score", f"{result.score:.1f}")
+                show_score_ring(result.score)
 
             st.markdown("**Why this matched**")
-            for reason in result.reasons:
-                st.write(f"- {reason}")
+            reasons = clean_display_reasons(result.reasons)
+            if reasons:
+                st.markdown(
+                    "<ul class='ads-reasons'>"
+                    + "".join(f"<li>{escape(reason)}</li>" for reason in reasons)
+                    + "</ul>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.caption("The file stayed in the candidate set after metadata and content checks.")
 
             show_page_preview(result)
+
+
+def show_score_ring(score: float) -> None:
+    bounded = max(0.0, min(float(score), 100.0))
+    color = score_color(bounded)
+    st.markdown(
+        f"""
+        <div class="ads-score-wrap">
+            <div>
+                <div
+                    class="ads-score-ring"
+                    style="--score:{bounded:.1f}; --score-color:{color};"
+                >
+                    {bounded:.0f}
+                </div>
+                <div class="ads-score-caption">score</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def score_color(score: float) -> str:
+    score = max(0.0, min(score, 100.0))
+    if score < 50:
+        ratio = score / 50
+        return interpolate_hex("#ef4444", "#facc15", ratio)
+    ratio = (score - 50) / 50
+    return interpolate_hex("#facc15", "#16a34a", ratio)
+
+
+def interpolate_hex(start: str, end: str, ratio: float) -> str:
+    ratio = max(0.0, min(ratio, 1.0))
+    start_rgb = hex_to_rgb(start)
+    end_rgb = hex_to_rgb(end)
+    mixed = [
+        round(start_value + (end_value - start_value) * ratio)
+        for start_value, end_value in zip(start_rgb, end_rgb)
+    ]
+    return "#" + "".join(f"{value:02x}" for value in mixed)
+
+
+def hex_to_rgb(value: str) -> tuple[int, int, int]:
+    value = value.lstrip("#")
+    return (
+        int(value[0:2], 16),
+        int(value[2:4], 16),
+        int(value[4:6], 16),
+    )
+
+
+def clean_display_reasons(reasons: list[str]) -> list[str]:
+    buckets: dict[str, list[str]] = {
+        "visual": [],
+        "content": [],
+        "metadata": [],
+        "memory": [],
+        "other": [],
+    }
+    for reason in reasons:
+        compact = compact_reason(reason)
+        if not compact:
+            continue
+        category = reason_category(compact)
+        if compact not in buckets[category]:
+            buckets[category].append(compact)
+
+    ordered = (
+        buckets["visual"][:2]
+        + buckets["content"][:2]
+        + buckets["metadata"][:2]
+        + buckets["memory"][:1]
+        + buckets["other"][:1]
+    )
+    return ordered[:5]
+
+
+def reason_category(reason: str) -> str:
+    lower = reason.lower()
+    if lower.startswith("visual"):
+        return "visual"
+    if lower.startswith("content") or lower.startswith("text evidence"):
+        return "content"
+    if lower.startswith("search memory"):
+        return "memory"
+    if (
+        "filename" in lower
+        or "folder" in lower
+        or "path" in lower
+        or "metadata" in lower
+        or lower.startswith("matched")
+        or lower.startswith("fuzzy")
+    ):
+        return "metadata"
+    return "other"
+    return cleaned
+
+
+def compact_reason(reason: str) -> str:
+    reason = reason.strip()
+    if not reason:
+        return ""
+
+    lower = reason.lower()
+    technical_markers = [
+        "cache hit",
+        "embedding cache",
+        "similarity",
+        "optional dependencies",
+        "run: .venv",
+        "could not load",
+        "could not create",
+    ]
+    if any(marker in lower for marker in technical_markers):
+        return ""
+
+    if reason.startswith("CLIP selected visual pages:") or reason.startswith("Visual page candidates:"):
+        pages = ", ".join(re.findall(r"\d+", reason))
+        return f"Visual page candidates: {pages}" if pages else "Visual pages looked relevant"
+
+    if reason.startswith("CLIP observation"):
+        return ""
+
+    if lower.startswith("visual analysis matched terms:") or lower.startswith("visual analysis matched:"):
+        terms = reason.split(":", 1)[1].strip()
+        return f"Visual analysis matched: {terms}" if terms else "Visual analysis supported the match"
+
+    if lower.startswith("visual observation "):
+        return trim_reason(reason.replace("visual observation ", "", 1))
+
+    if reason.startswith("content text matched:"):
+        terms = reason.split(":", 1)[1].strip()
+        return f"Content matched: {terms}" if terms else "Content matched the query"
+
+    if reason.startswith("content snippet "):
+        return trim_reason(reason.replace("content snippet ", "Text evidence: ", 1))
+
+    if reason.startswith("search memory:"):
+        return "Search memory recalled similar past searches"
+
+    metadata_match = re.match(r"matched '([^']+)' in (.+)", reason)
+    if metadata_match:
+        term, field = metadata_match.groups()
+        if "folder" in field or "path" in field:
+            return f"Folder/path matched: {term}"
+        if "filename" in field or "title" in field:
+            return f"Filename/title matched: {term}"
+        return f"Metadata matched: {term}"
+
+    fuzzy_match = re.match(r"fuzzy matched '([^']+)' to '([^']+)' in (.+)", reason)
+    if fuzzy_match:
+        query_term, matched_term, field = fuzzy_match.groups()
+        if "filename" in field or "title" in field:
+            return f"Filename/title fuzzy-matched {query_term} to {matched_term}"
+        if "folder" in field or "path" in field:
+            return f"Folder/path fuzzy-matched {query_term} to {matched_term}"
+        return f"Metadata fuzzy-matched {query_term} to {matched_term}"
+
+    if reason.startswith("local OCR fallback note:"):
+        return ""
+
+    return trim_reason(reason)
+
+
+def trim_reason(reason: str, max_chars: int = 170) -> str:
+    reason = " ".join(reason.split())
+    if len(reason) <= max_chars:
+        return reason
+    return reason[: max_chars - 1].rstrip() + "…"
 
 
 def show_page_preview(result: object) -> None:
@@ -679,18 +1037,20 @@ def show_page_preview(result: object) -> None:
 
     preview_pages = extract_preview_pages(result.reasons)
     preview_label = (
-        "Show selected page"
+        "Hide preview"
+        if st.session_state.get(f"preview_{record.get('file_id')}_visible", True)
+        else "Show selected page"
         if preview_pages != [1]
         else "Show first page"
     )
     key = f"preview_{record.get('file_id')}"
+    visible_key = f"{key}_visible"
+    if visible_key not in st.session_state:
+        st.session_state[visible_key] = True
     if st.button(preview_label, key=key):
-        st.session_state[f"{key}_visible"] = not st.session_state.get(
-            f"{key}_visible",
-            False,
-        )
+        st.session_state[visible_key] = not st.session_state[visible_key]
 
-    if not st.session_state.get(f"{key}_visible", False):
+    if not st.session_state.get(visible_key, True):
         return
 
     try:
@@ -710,7 +1070,7 @@ def show_page_preview(result: object) -> None:
 def extract_preview_pages(reasons: list[str]) -> list[int]:
     pages: list[int] = []
     for reason in reasons:
-        if "CLIP selected visual pages:" in reason:
+        if "CLIP selected visual pages:" in reason or "Visual page candidates:" in reason:
             pages.extend(int(value) for value in re.findall(r"\d+", reason))
         else:
             pages.extend(
