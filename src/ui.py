@@ -21,6 +21,7 @@ from search import DEFAULT_INDEX_PATH, load_environment
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+AZURE_RUNTIME_DIR_NAME = "agentic-document-search"
 FILE_TYPE_CHOICES = {
     "excel": {
         "label": "Excel",
@@ -49,6 +50,8 @@ TEXT_HEAVY_FILE_TYPE_KEYS = {"excel", "word"}
 
 def main() -> None:
     load_environment()
+    runtime_root = resolve_runtime_root()
+    configure_runtime_environment(runtime_root)
     configure_page()
 
     st.title("Agentic Document Search")
@@ -64,7 +67,7 @@ def main() -> None:
 
     with st.sidebar:
         st.header("Search Settings")
-        render_index_controls()
+        render_index_controls(runtime_root)
 
         search_mode = st.radio(
             "Search mode",
@@ -240,18 +243,20 @@ def main() -> None:
         show_empty_state()
         return
 
-    index_path = PROJECT_ROOT / DEFAULT_INDEX_PATH
-    content_cache_path = PROJECT_ROOT / "indexes/content_cache.json"
-    visual_cache_path = PROJECT_ROOT / "indexes/visual_cache.json"
-    clip_cache_path = PROJECT_ROOT / "indexes/clip_visual_cache.json"
-    search_memory_path = PROJECT_ROOT / "indexes/search_memory.json"
+    paths = resolve_app_paths(runtime_root)
+    index_path = paths["index"]
+    content_cache_path = paths["content_cache"]
+    visual_cache_path = paths["visual_cache"]
+    clip_cache_path = paths["clip_cache"]
+    search_memory_path = paths["search_memory"]
 
     if not search_clicked:
         show_cached_response()
         return
 
-    with st.spinner("Running agentic search..."):
+    with st.spinner("Preparing index and running agentic search..."):
         try:
+            ensure_index_exists(index_path)
             response = run_agent(
                 query=query,
                 index_path=index_path,
@@ -342,17 +347,63 @@ def rerun() -> None:
         st.experimental_rerun()
 
 
-def render_index_controls() -> None:
+def resolve_runtime_root() -> Path:
+    configured = os.getenv("ADS_RUNTIME_DIR", "").strip()
+    if configured:
+        return Path(configured).expanduser()
+
+    if is_azure_app_service():
+        home = Path(os.getenv("HOME", "/home")).expanduser()
+        return home / AZURE_RUNTIME_DIR_NAME
+
+    return PROJECT_ROOT
+
+
+def is_azure_app_service() -> bool:
+    return bool(
+        os.getenv("WEBSITE_SITE_NAME")
+        or os.getenv("WEBSITE_INSTANCE_ID")
+        or os.getenv("WEBSITE_HOSTNAME")
+    )
+
+
+def configure_runtime_environment(runtime_root: Path) -> None:
+    runtime_root.mkdir(parents=True, exist_ok=True)
+    os.environ.setdefault(
+        "ADS_BLOB_CACHE_DIR",
+        str(runtime_root / "indexes/blob_cache"),
+    )
+    os.environ.setdefault(
+        "ADS_CLIP_MODEL_CACHE_DIR",
+        str(runtime_root / "indexes/model_cache/huggingface"),
+    )
+
+
+def resolve_app_paths(runtime_root: Path) -> dict[str, Path]:
+    indexes_dir = runtime_root / "indexes"
+    return {
+        "index": runtime_root / DEFAULT_INDEX_PATH,
+        "content_cache": indexes_dir / "content_cache.json",
+        "visual_cache": indexes_dir / "visual_cache.json",
+        "clip_cache": indexes_dir / "clip_visual_cache.json",
+        "search_memory": indexes_dir / "search_memory.json",
+        "page_previews": indexes_dir / "page_previews",
+    }
+
+
+def render_index_controls(runtime_root: Path) -> None:
     with st.expander("🗂️ Index"):
         st.caption(
             "Refresh after documents are added, deleted, renamed, or moved."
         )
+        if is_azure_app_service():
+            st.caption(f"Cloud runtime: `{runtime_root}`")
         local_clicked = st.button(
             "Refresh local index",
             use_container_width=True,
         )
         if local_clicked:
-            refresh_local_index()
+            refresh_local_index(runtime_root)
 
         if os.getenv("AZURE_BLOB_CONTAINER_URL"):
             blob_clicked = st.button(
@@ -360,12 +411,12 @@ def render_index_controls() -> None:
                 use_container_width=True,
             )
             if blob_clicked:
-                refresh_blob_index()
+                refresh_blob_index(runtime_root)
 
 
-def refresh_local_index() -> None:
+def refresh_local_index(runtime_root: Path) -> None:
     data_dir = PROJECT_ROOT / "data/raw"
-    index_path = PROJECT_ROOT / DEFAULT_INDEX_PATH
+    index_path = resolve_app_paths(runtime_root)["index"]
     try:
         records = collect_file_metadata(data_dir)
         save_json(records, index_path)
@@ -376,17 +427,48 @@ def refresh_local_index() -> None:
     st.success(f"Refreshed local index with {len(records)} files.")
 
 
-def refresh_blob_index() -> None:
+def refresh_blob_index(runtime_root: Path) -> None:
     container_url = os.getenv("AZURE_BLOB_CONTAINER_URL", "")
-    index_path = PROJECT_ROOT / DEFAULT_INDEX_PATH
+    index_path = resolve_app_paths(runtime_root)["index"]
     try:
-        records = collect_azure_blob_metadata(container_url)
-        save_json(records, index_path)
+        records = build_blob_index(index_path, container_url)
     except Exception as error:
         st.error(f"Could not refresh Azure Blob index: {error}")
         return
 
     st.success(f"Refreshed Azure Blob index with {len(records)} files.")
+
+
+def ensure_index_exists(index_path: Path) -> None:
+    if index_path.exists():
+        return
+
+    container_url = os.getenv("AZURE_BLOB_CONTAINER_URL", "").strip()
+    if container_url:
+        records = build_blob_index(index_path, container_url)
+        st.info(f"Created Azure Blob index with {len(records)} files.")
+        return
+
+    data_dir = PROJECT_ROOT / "data/raw"
+    if data_dir.exists():
+        records = collect_file_metadata(data_dir)
+        save_json(records, index_path)
+        st.info(f"Created local index with {len(records)} files.")
+        return
+
+    raise FileNotFoundError(
+        "Index not found and no document source is configured. "
+        "Set AZURE_BLOB_CONTAINER_URL or add documents under data/raw."
+    )
+
+
+def build_blob_index(index_path: Path, container_url: str) -> list[dict[str, object]]:
+    if not container_url.strip():
+        raise ValueError("AZURE_BLOB_CONTAINER_URL is empty.")
+
+    records = collect_azure_blob_metadata(container_url)
+    save_json(records, index_path)
+    return records
 
 
 def configure_page() -> None:
@@ -654,7 +736,7 @@ def render_preview_pages(
         raise RuntimeError("PDF preview needs PyMuPDF from requirements.txt") from error
 
     source_path = resolve_document_path(record)
-    preview_dir = PROJECT_ROOT / "indexes/page_previews"
+    preview_dir = resolve_app_paths(resolve_runtime_root())["page_previews"]
     preview_dir.mkdir(parents=True, exist_ok=True)
     output: list[tuple[Path, int]] = []
 

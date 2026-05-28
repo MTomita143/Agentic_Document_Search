@@ -116,6 +116,12 @@ The sidebar has an index refresh control. Refresh after files are added,
 deleted, renamed, or moved. Local refresh scans `data/raw`. Azure Blob refresh
 appears when `AZURE_BLOB_CONTAINER_URL` is configured.
 
+On Azure App Service, the app writes generated indexes and caches under a
+persistent runtime directory instead of the temporary deployment folder. If
+`indexes/files_index.json` is missing and `AZURE_BLOB_CONTAINER_URL` is set,
+the Streamlit app automatically creates the Blob metadata index before search.
+Set `ADS_RUNTIME_DIR` only if you want to override that runtime location.
+
 Open `⚙️ Customize mode` in the sidebar to override text inspection, Azure
 Translator, Azure AI Search, LLM usage, 📎 CLIP prefiltering, Azure visual
 inspection, and 🛠️ inspection limits.
@@ -204,6 +210,8 @@ AZURE_AI_SEARCH_QUERY_TYPE="simple"
 AZURE_AI_SEARCH_SELECT_FIELDS="file_id,uri,relative_path,filename,title,content"
 
 AZURE_BLOB_CONTAINER_URL="https://YOUR-STORAGE-ACCOUNT.blob.core.windows.net/YOUR-CONTAINER?YOUR-SAS"
+# Optional Azure App Service override. Leave unset locally.
+# ADS_RUNTIME_DIR="/home/agentic-document-search"
 ADS_LOCAL_DATA_DIR="data/raw"
 ADS_BLOB_CACHE_DIR="indexes/blob_cache"
 ADS_CLIP_MODEL_CACHE_DIR="indexes/model_cache/huggingface"
