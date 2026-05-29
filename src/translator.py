@@ -19,6 +19,7 @@ from search import has_cjk
 
 
 DEFAULT_TRANSLATOR_API_VERSION = "3.0"
+DEFAULT_TRANSLATOR_ENDPOINT = "https://api.cognitive.microsofttranslator.com"
 
 
 @dataclass
@@ -88,16 +89,16 @@ def expand_query_with_translator(query: str) -> QueryTranslation:
 
 def missing_translator_config() -> list[str]:
     missing = []
-    if not os.getenv("AZURE_TRANSLATOR_ENDPOINT"):
-        missing.append("AZURE_TRANSLATOR_ENDPOINT")
-    if not os.getenv("AZURE_TRANSLATOR_KEY"):
-        missing.append("AZURE_TRANSLATOR_KEY")
+    if not get_translator_key():
+        missing.append("AZURE_TRANSLATOR_KEY or AZURE_OPENAI_API_KEY")
     return missing
 
 
 def translate_text(text: str, to_language: str) -> tuple[str, str | None]:
-    endpoint = str(os.getenv("AZURE_TRANSLATOR_ENDPOINT", "")).rstrip("/")
-    key = str(os.getenv("AZURE_TRANSLATOR_KEY", ""))
+    endpoint = str(
+        os.getenv("AZURE_TRANSLATOR_ENDPOINT", DEFAULT_TRANSLATOR_ENDPOINT)
+    ).rstrip("/")
+    key = str(get_translator_key())
     region = os.getenv("AZURE_TRANSLATOR_REGION")
     api_version = os.getenv(
         "AZURE_TRANSLATOR_API_VERSION",
@@ -132,7 +133,11 @@ def translate_text(text: str, to_language: str) -> tuple[str, str | None]:
             payload = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as error:
         details = error.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Azure Translator request failed: {details}") from error
+        raise RuntimeError(
+            "Azure Translator request failed. If you are using a multi-service "
+            "Azure AI resource key, set AZURE_TRANSLATOR_REGION to the resource "
+            f"region. Details: {details}"
+        ) from error
     except urllib.error.URLError as error:
         raise RuntimeError(f"Azure Translator request failed: {error}") from error
 
@@ -151,3 +156,7 @@ def translate_text(text: str, to_language: str) -> tuple[str, str | None]:
 
     translated_text = str(translations[0].get("text", ""))
     return translated_text, detected_language
+
+
+def get_translator_key() -> str | None:
+    return os.getenv("AZURE_TRANSLATOR_KEY") or os.getenv("AZURE_OPENAI_API_KEY")

@@ -32,6 +32,7 @@ from content import (
     ContentEvidence,
     inspect_content_for_results,
 )
+from content_reranker import rerank_with_content_azure_openai
 from search import (
     DEFAULT_INDEX_PATH,
     SearchResult,
@@ -436,9 +437,29 @@ def run_agent(
             cache_path=content_cache_path,
         )
         apply_content_evidence(results, content_evidence)
-        results = sorted(results, key=lambda result: result.score, reverse=True)[:top_k]
+        results = sorted(results, key=lambda result: result.score, reverse=True)
         evidence_scope = f"{evidence_scope} + extracted candidate text"
         add_step(steps, make_content_step(content_evidence), step_callback)
+        if should_run_content_llm_rerank(mode, content_evidence):
+            emit_progress(steps, step_callback, "Content LLM Rerank")
+            try:
+                results = rerank_with_content_azure_openai(
+                    query=search_query,
+                    results=results,
+                    content_evidence=content_evidence,
+                    top_k=top_k,
+                )
+                evidence_scope = f"{evidence_scope} + deep Azure OpenAI content reranking"
+                add_step(steps, make_content_llm_step(results), step_callback)
+            except Exception as error:
+                results = results[:top_k]
+                add_step(
+                    steps,
+                    make_content_llm_deferred_step(str(error)),
+                    step_callback,
+                )
+        else:
+            results = results[:top_k]
     else:
         add_step(
             steps,
@@ -841,6 +862,40 @@ def make_content_step(content_evidence: list[ContentEvidence]) -> AgentStep:
             f"Read text from {inspected_files} candidate files across "
             f"{inspected_pages} pages/slides/sheets. {matched_files} files had "
             f"matching text.{ocr_detail}"
+        ),
+    )
+
+
+def should_run_content_llm_rerank(
+    mode: str,
+    content_evidence: list[ContentEvidence],
+) -> bool:
+    if mode != "llm":
+        return False
+    return any(
+        not evidence.error and (evidence.text_samples or evidence.snippets)
+        for evidence in content_evidence
+    )
+
+
+def make_content_llm_step(results: list[SearchResult]) -> AgentStep:
+    return AgentStep(
+        name="Content LLM Rerank",
+        status="done",
+        detail=(
+            "Used the deep Azure OpenAI deployment to compare extracted text "
+            f"evidence and return the top {len(results)} matches."
+        ),
+    )
+
+
+def make_content_llm_deferred_step(error: str) -> AgentStep:
+    return AgentStep(
+        name="Content LLM Rerank",
+        status="deferred",
+        detail=(
+            "Deep content reranking could not run, so the agent kept the local "
+            f"text ranking. {error}"
         ),
     )
 

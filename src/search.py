@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import sys
 import unicodedata
@@ -23,11 +22,16 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
+from azure_openai_config import (
+    deployment_candidates,
+    format_deployment_not_found_message,
+    get_azure_openai_config,
+    is_deployment_not_found_error,
+)
 from metadata import hydrate_records
 
 
 DEFAULT_INDEX_PATH = Path("indexes/files_index.json")
-DEFAULT_AZURE_OPENAI_API_VERSION = "2024-12-01-preview"
 CJK_RE = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uff66-\uff9f]+")
 TOKEN_RE = re.compile(r"[a-z0-9]+|[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uff66-\uff9f]+")
 SINGLE_CJK_TERMS = {"表", "図", "青", "赤", "黒", "白"}
@@ -520,28 +524,37 @@ def rerank_with_azure_openai(
     candidates: list[SearchResult],
     top_k: int,
 ) -> list[dict[str, Any]]:
-    endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
-    api_key = os.getenv("AZURE_OPENAI_API_KEY")
-    deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT")
-    api_version = os.getenv(
-        "AZURE_OPENAI_API_VERSION",
-        DEFAULT_AZURE_OPENAI_API_VERSION,
-    )
+    attempted_deployments: list[str] = []
+    last_deployment_error: Exception | None = None
+    for deployment in deployment_candidates("fast"):
+        attempted_deployments.append(deployment)
+        config = get_azure_openai_config("fast", deployment=deployment)
+        try:
+            return request_metadata_rerank(query, candidates, top_k, config)
+        except Exception as error:
+            if is_deployment_not_found_error(error):
+                last_deployment_error = error
+                continue
+            raise
 
-    missing = [
-        name
-        for name, value in {
-            "AZURE_OPENAI_ENDPOINT": endpoint,
-            "AZURE_OPENAI_API_KEY": api_key,
-            "AZURE_OPENAI_DEPLOYMENT": deployment,
-        }.items()
-        if not value
-    ]
-    if missing:
+    if last_deployment_error:
         raise RuntimeError(
-            "LLM mode needs Azure OpenAI environment variables: "
-            + ", ".join(missing)
+            format_deployment_not_found_message(
+                "fast",
+                attempted_deployments,
+                last_deployment_error,
+            )
         )
+
+    raise RuntimeError("Azure OpenAI fast deployment is not configured.")
+
+
+def request_metadata_rerank(
+    query: str,
+    candidates: list[SearchResult],
+    top_k: int,
+    config: Any,
+) -> list[dict[str, Any]]:
 
     try:
         from openai import AzureOpenAI
@@ -551,9 +564,9 @@ def rerank_with_azure_openai(
         ) from error
 
     client = AzureOpenAI(
-        api_version=api_version,
-        azure_endpoint=endpoint,
-        api_key=api_key,
+        api_version=config.api_version,
+        azure_endpoint=config.endpoint,
+        api_key=config.api_key,
     )
     response = client.chat.completions.create(
         messages=[
@@ -606,7 +619,7 @@ def rerank_with_azure_openai(
             },
         ],
         max_completion_tokens=2000,
-        model=deployment,
+        model=config.deployment,
         response_format={"type": "json_object"},
     )
 

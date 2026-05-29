@@ -56,6 +56,7 @@ FLOW_STEPS = [
     ("Search Memory", "Recall"),
     ("Azure AI Search", "AI Search"),
     ("Inspect Content", "Read text"),
+    ("Content LLM Rerank", "Deep reading"),
     ("CLIP Visual Prefilter", "Visual filter"),
     ("Inspect Visuals", "Check pages"),
     ("Return Answer", "Answer"),
@@ -736,26 +737,26 @@ def inject_ui_styles() -> None:
 
 def format_search_mode(value: str) -> str:
     return {
-        "auto": "🤖 Auto",
-        "instant": "🚧 Safety",
-        "reasoning": "🧠 Reasoning",
-        "visual": "👁️ Visual",
+        "auto": "🎯 Auto Search",
+        "instant": "⚡ Filename Search",
+        "reasoning": "📦 Content Search",
+        "visual": "👁️ Visual Search",
     }[value]
 
 
 def mode_summary(value: str) -> str:
     return {
-        "auto": "Semantic Kernel chooses the search strategy.",
-        "instant": "Filename and folder-path search only. No file content inspection.",
-        "reasoning": "Instant search plus Azure OpenAI reranking.",
-        "visual": "Reasoning search plus CLIP prefilter and Azure visual inspection.",
+        "auto": "Automatically choose the best search method.",
+        "instant": "Search using filenames, folders, and file details.",
+        "reasoning": "Open documents and match their contents.",
+        "visual": "Match documents by content, layout, charts, and images.",
     }[value]
 
 
 def preset_settings(value: str) -> dict[str, object]:
     presets = {
         "instant": {
-            "mode": "local",
+            "mode": "llm",
             "content_mode": "never",
             "translator_mode": "never",
             "azure_ai_search_mode": "never",

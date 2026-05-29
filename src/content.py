@@ -13,7 +13,7 @@ import re
 import shutil
 import subprocess
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -67,6 +67,7 @@ class ContentEvidence:
     ocr_used: bool = False
     ocr_pages: int = 0
     ocr_error: str | None = None
+    text_samples: list[str] = field(default_factory=list)
 
 
 def inspect_content_for_results(
@@ -629,6 +630,7 @@ def score_extracted_text(query: str, extracted: dict[str, Any]) -> ContentEviden
         score=score,
         matched_terms=sorted(matched_terms),
         snippets=unique_snippets,
+        text_samples=make_text_samples(extracted, query_terms),
         inspected_pages=int(extracted.get("inspected_pages", 0)),
         page_count=int(extracted.get("page_count", 0)),
         cache_hit=bool(extracted.get("cache_hit", False)),
@@ -648,6 +650,42 @@ def term_matches(normalized_text: str, term: str) -> bool:
 
     pattern = rf"\b{re.escape(term)}[a-z0-9]*\b"
     return re.search(pattern, normalized_text) is not None
+
+
+def make_text_samples(
+    extracted: dict[str, Any],
+    query_terms: list[str],
+    max_samples: int = 4,
+    max_chars: int = 700,
+) -> list[str]:
+    samples: list[str] = []
+    pages = extracted.get("pages", [])
+    unit_label = str(extracted.get("unit_label", "page"))
+
+    matching_pages = [
+        page
+        for page in pages
+        if any(
+            term_matches(normalize_for_content(str(page.get("text", ""))), term)
+            for term in query_terms
+        )
+    ]
+    sample_pages = matching_pages or pages
+
+    for page in sample_pages:
+        text = compact_text(str(page.get("text", "")))
+        if not text:
+            continue
+        page_number = int(page.get("page_number", 0))
+        samples.append(f"{unit_label} {page_number}: {text[:max_chars]}")
+        if len(samples) >= max_samples:
+            break
+
+    return samples
+
+
+def compact_text(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def make_snippet(text: str, term: str, window: int = 80) -> str | None:

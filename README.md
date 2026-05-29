@@ -94,8 +94,8 @@ The UI offers four search modes:
 
 ```text
 🤖 Auto      Semantic Kernel chooses the search strategy
-🚧 Safety    metadata/path/name search only; no file content inspection
-🧠 Reasoning metadata + content inspection + Azure OpenAI reranking
+🚧 Safety    filename/folder-path reasoning with the fast model; no file content inspection
+🧠 Reasoning metadata reranking with the fast model, then content reranking with the deep model
 👁️ Visual    reasoning search + CLIP prefilter + Azure visual inspection
 ```
 
@@ -211,17 +211,23 @@ Create a local `.env` file:
 ```bash
 AZURE_OPENAI_ENDPOINT="https://YOUR-RESOURCE.cognitiveservices.azure.com/"
 AZURE_OPENAI_API_KEY="YOUR-KEY"
-AZURE_OPENAI_DEPLOYMENT="gpt-5-mini"
+AZURE_OPENAI_FAST_DEPLOYMENT="gpt-5.4-mini"
+AZURE_OPENAI_DEEP_DEPLOYMENT="gpt-5.4"
+# Optional fallback for older single-deployment setup.
+# AZURE_OPENAI_DEPLOYMENT="gpt-5-mini"
 AZURE_OPENAI_API_VERSION="2024-12-01-preview"
 
-AZURE_VISION_ENDPOINT="https://YOUR-VISION-RESOURCE.cognitiveservices.azure.com/"
-AZURE_VISION_KEY="YOUR-VISION-KEY"
+# Azure Vision uses AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_API_KEY by default
+# when it lives in the same Azure AI Foundry resource.
+# AZURE_VISION_ENDPOINT="https://YOUR-SEPARATE-VISION-RESOURCE.cognitiveservices.azure.com/"
+# AZURE_VISION_KEY="YOUR-SEPARATE-VISION-KEY"
 AZURE_VISION_API_VERSION="2024-02-01"
 AZURE_VISION_FEATURES="caption,denseCaptions,tags,read,objects"
 
-AZURE_TRANSLATOR_ENDPOINT="https://api.cognitive.microsofttranslator.com"
-AZURE_TRANSLATOR_KEY="YOUR-TRANSLATOR-KEY"
-AZURE_TRANSLATOR_REGION="YOUR-TRANSLATOR-REGION"
+# Azure Translator uses AZURE_OPENAI_API_KEY by default. The endpoint defaults
+# to https://api.cognitive.microsofttranslator.com.
+# AZURE_TRANSLATOR_KEY="YOUR-SEPARATE-TRANSLATOR-KEY"
+AZURE_TRANSLATOR_REGION="YOUR-AZURE-AI-RESOURCE-REGION"
 AZURE_TRANSLATOR_API_VERSION="3.0"
 
 AZURE_AI_SEARCH_ENDPOINT="https://YOUR-SEARCH-SERVICE.search.windows.net"
@@ -249,16 +255,31 @@ Run:
 .venv/bin/python src/search.py --query "the board slide deck" --mode llm --top-k 3
 ```
 
+Model routing:
+
+```text
+AZURE_OPENAI_FAST_DEPLOYMENT
+  Semantic Kernel planning and metadata-only reranking
+
+AZURE_OPENAI_DEEP_DEPLOYMENT
+  content-aware reranking after text extraction
+
+AZURE_OPENAI_DEPLOYMENT
+  optional single-deployment fallback
+```
+
 Run the agent flow with Azure OpenAI metadata reranking:
 ```bash
 .venv/bin/python src/agent.py --query "the board slide deck" --mode llm --top-k 3
 ```
 
-The Azure OpenAI reranker receives only candidate file metadata. The agent can
-then inspect extracted PDF/PPTX/DOCX/XLSX text locally for top candidates when useful. Visual
-inspection renders only selected top-candidate PDF pages and sends those images
-to Azure Vision when `--visual-mode azure` is used or when `--visual-mode auto`
-sees visual clues.
+The fast Azure OpenAI reranker receives only candidate file metadata. The agent
+can then inspect extracted PDF/PPTX/DOCX/XLSX text locally for top candidates
+when useful. When content evidence exists and LLM mode is enabled, the deep
+deployment reranks the candidates using only the extracted text samples,
+snippets, and metadata. Visual inspection renders only selected top-candidate
+PDF pages and sends those images to Azure Vision when `--visual-mode azure` is
+used or when `--visual-mode auto` sees visual clues.
 
 If a candidate PDF has very little extractable text, the content layer can use
 local Tesseract OCR as a fallback. This is intentionally local and free of Azure

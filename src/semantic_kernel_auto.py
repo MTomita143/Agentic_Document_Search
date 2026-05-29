@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 from dataclasses import dataclass
 from typing import Any
 
+from azure_openai_config import (
+    get_azure_openai_config,
+    missing_azure_openai_config,
+)
 from search import has_cjk, normalize_text, tokenize
 
 
@@ -130,13 +133,14 @@ async def plan_with_semantic_kernel(
             "Semantic Kernel package is not installed. Install requirements-semantic-kernel.txt."
         ) from error
 
+    config = get_azure_openai_config("fast")
     kernel = Kernel()
     kernel.add_service(
         AzureChatCompletion(
-            deployment_name=str(os.getenv("AZURE_OPENAI_DEPLOYMENT")),
-            endpoint=str(os.getenv("AZURE_OPENAI_ENDPOINT")),
-            api_key=str(os.getenv("AZURE_OPENAI_API_KEY")),
-            api_version=str(os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview")),
+            deployment_name=config.deployment,
+            endpoint=config.endpoint,
+            api_key=config.api_key,
+            api_version=config.api_version,
             service_id="planner",
         )
     )
@@ -273,15 +277,7 @@ def deterministic_plan(
 
 
 def missing_semantic_kernel_planner_config() -> list[str]:
-    missing = []
-    for name in (
-        "AZURE_OPENAI_ENDPOINT",
-        "AZURE_OPENAI_API_KEY",
-        "AZURE_OPENAI_DEPLOYMENT",
-    ):
-        if not os.getenv(name):
-            missing.append(name)
-    return missing
+    return missing_azure_openai_config("fast")
 
 
 def clean_choice(value: Any, allowed: set[str], default: str) -> str:

@@ -68,20 +68,36 @@ class VisualEvidence:
 
 def missing_vision_config() -> list[str]:
     names = []
-    endpoint = os.getenv("AZURE_VISION_ENDPOINT") or os.getenv("VISION_ENDPOINT")
-    key = os.getenv("AZURE_VISION_KEY") or os.getenv("VISION_KEY")
+    endpoint = (
+        os.getenv("AZURE_VISION_ENDPOINT")
+        or os.getenv("VISION_ENDPOINT")
+        or os.getenv("AZURE_OPENAI_ENDPOINT")
+    )
+    key = (
+        os.getenv("AZURE_VISION_KEY")
+        or os.getenv("VISION_KEY")
+        or os.getenv("AZURE_OPENAI_API_KEY")
+    )
 
     if not endpoint:
-        names.append("AZURE_VISION_ENDPOINT or VISION_ENDPOINT")
+        names.append("AZURE_VISION_ENDPOINT or AZURE_OPENAI_ENDPOINT")
     if not key:
-        names.append("AZURE_VISION_KEY or VISION_KEY")
+        names.append("AZURE_VISION_KEY or AZURE_OPENAI_API_KEY")
 
     return names
 
 
 def load_vision_config() -> VisionConfig:
-    endpoint = os.getenv("AZURE_VISION_ENDPOINT") or os.getenv("VISION_ENDPOINT")
-    key = os.getenv("AZURE_VISION_KEY") or os.getenv("VISION_KEY")
+    endpoint = (
+        os.getenv("AZURE_VISION_ENDPOINT")
+        or os.getenv("VISION_ENDPOINT")
+        or os.getenv("AZURE_OPENAI_ENDPOINT")
+    )
+    key = (
+        os.getenv("AZURE_VISION_KEY")
+        or os.getenv("VISION_KEY")
+        or os.getenv("AZURE_OPENAI_API_KEY")
+    )
     api_version = os.getenv("AZURE_VISION_API_VERSION", DEFAULT_VISION_API_VERSION)
     features = os.getenv("AZURE_VISION_FEATURES", DEFAULT_VISION_FEATURES)
 
