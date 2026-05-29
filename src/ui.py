@@ -88,10 +88,16 @@ def main() -> None:
     )
 
     query = st.text_input(
-        "Any clues about the document?",
-        placeholder="Example: Apache関連だった気がするんだけど、Engineering配下にあった年次レポートを探して",
+        label="",
+        placeholder="例: Apache関連の年次レポートを探して",
         key="query_input",
+        label_visibility="collapsed",
     )
+    
+    st.markdown("<div class='ads-after-search-box'></div>", unsafe_allow_html=True)
+
+    if not query:
+        show_empty_state()
     
     selected_file_types = render_file_type_buttons()
     selected_extensions = extensions_for_file_types(selected_file_types)
@@ -253,20 +259,7 @@ def main() -> None:
             visual_mode = "never"
             visual_prefilter = "none"
             st.caption("Visual inspection is skipped because no visual-friendly file type is selected.")
-    """
-    show_cost_notice(
-        search_mode,
-        orchestration_mode,
-        mode,
-        translator_mode,
-        azure_ai_search_mode,
-        visual_mode,
-        visual_prefilter,
-        max_visual_files,
-        max_visual_pages_per_file,
-        max_clip_pages,
-    )    
-    """
+
     _, search_col, _ = st.columns([1.2, 1, 1.2])
     with search_col:
         search_clicked = st.button(
@@ -279,7 +272,6 @@ def main() -> None:
     if not query:
         if search_clicked:
             st.warning("Enter a search memory first.")
-        show_empty_state()
         return
 
     paths = resolve_app_paths(runtime_root)
@@ -359,7 +351,7 @@ def show_cached_response() -> None:
 
 
 def render_file_type_buttons() -> set[str]:
-    st.caption("File type")
+    st.markdown("<div class='ads-file-type-spacer'></div>", unsafe_allow_html=True)
     st.caption("Optional: narrow the search if you remember the file format.")
     if "selected_file_types" not in st.session_state:
         st.session_state.selected_file_types = []
@@ -605,14 +597,14 @@ def inject_ui_styles() -> None:
         .st-key-query_input input {
             min-height: 3.4rem;
             border-radius: 8px;
-            border: 1.5px solid #cbd5e1;
+            border: 1.5px solid var(--ads-light-blue);
             background: #f8fafc;
             font-size: 1.05rem;
         }
 
         .st-key-query_input input:focus {
-            border-color: var(--ads-orange);
-            box-shadow: 0 0 0 0.12rem rgba(249, 115, 22, 0.18);
+            border-color: var(--ads-light-blue);
+            box-shadow: 0 0 0 0.12rem rgba(127, 187, 221, 0.28);
         }
 
         .st-key-search_button button {
@@ -761,6 +753,14 @@ def inject_ui_styles() -> None:
             font-size: 1.05rem;
             margin-top: 0.25rem;
         }
+        
+        .ads-after-search-box {
+            height: 1cm;
+        }
+
+        .ads-file-type-spacer {
+            height: 0.35rem;
+        }
 
         .ads-reasons li {
             margin: 0.2rem 0;
@@ -861,30 +861,6 @@ def show_empty_state() -> None:
         - 👁️ *I'm looking for a telecom-related presentation with revenue graphs and a distinctive magenta corporate design.*
         """
     )
-
-def show_cost_notice(
-    search_mode: str,
-    orchestration_mode: str,
-    mode: str,
-    translator_mode: str,
-    azure_ai_search_mode: str,
-    visual_mode: str,
-    visual_prefilter: str,
-    max_visual_files: int,
-    max_visual_pages_per_file: int,
-    max_clip_pages: int,
-) -> None:
-    if search_mode == "auto" or orchestration_mode == "semantic-kernel":
-        st.warning("⚠️ Azure OpenAI and Vision may be enabled!")
-        return
-
-    if visual_mode in {"azure", "auto"} or visual_prefilter == "clip":
-        st.warning("⚠️ Azure OpenAI and Vision are enabled!")
-        return
-
-    if mode == "llm":
-        st.warning("⚠️ Azure OpenAI is enabled!")
-
 
 def estimate_vision_calls(
     visual_prefilter: str,
