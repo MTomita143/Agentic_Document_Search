@@ -87,17 +87,17 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
-    query = st.text_input(
-        label="",
+    st.markdown(
+        "<div class='ads-query-label'>Any clues about the document?</div>",
+        unsafe_allow_html=True,
+    )
+    query = st.text_area(
+        label="Any clues about the document?",
         placeholder="例: Apache関連の年次レポートを探して",
         key="query_input",
         label_visibility="collapsed",
+        height=112,
     )
-    
-    st.markdown("<div class='ads-after-search-box'></div>", unsafe_allow_html=True)
-
-    if not query:
-        show_empty_state()
     
     selected_file_types = render_file_type_buttons()
     selected_extensions = extensions_for_file_types(selected_file_types)
@@ -270,6 +270,9 @@ def main() -> None:
         )
 
     if not query:
+        show_empty_state()
+
+    if not query:
         if search_clicked:
             st.warning("Enter a search memory first.")
         return
@@ -352,7 +355,7 @@ def show_cached_response() -> None:
 
 def render_file_type_buttons() -> set[str]:
     st.markdown("<div class='ads-file-type-spacer'></div>", unsafe_allow_html=True)
-    st.caption("Optional: narrow the search if you remember the file format.")
+    st.caption("Optional: narrow the search if you remember the file format")
     if "selected_file_types" not in st.session_state:
         st.session_state.selected_file_types = []
 
@@ -538,6 +541,7 @@ def inject_ui_styles() -> None:
         :root {
             --ads-blue: #3b82f6;
             --ads-light-blue: #7fbbdd;
+            --ads-soft-blue: #CBE3F1;
             --ads-orange: #f58b05;
             --ads-ink: #111827;
             --ads-muted: #6b7280;
@@ -546,6 +550,11 @@ def inject_ui_styles() -> None:
 
         div[data-testid="stMetric"] {
             display: none;
+        }
+
+        section[data-testid="stSidebar"],
+        section[data-testid="stSidebar"] > div {
+            background: var(--ads-soft-blue);
         }
 
         .st-key-file_type_excel button,
@@ -557,24 +566,60 @@ def inject_ui_styles() -> None:
             background: white;
             font-weight: 750;
             font-size: 1.03rem;
-            box-shadow: none;
+            box-shadow: none !important;
         }
 
         .st-key-file_type_excel button {
-            border: 1.5px solid #16833a;
+            border: 1.5px solid #16833a !important;
             color: #16833a;
         }
         .st-key-file_type_word button {
-            border: 1.5px solid #2563eb;
+            border: 1.5px solid #2563eb !important;
             color: #2563eb;
         }
         .st-key-file_type_powerpoint button {
-            border: 1.5px solid #ea580c;
+            border: 1.5px solid #ea580c !important;
             color: #ea580c;
         }
         .st-key-file_type_pdf button {
-            border: 1.5px solid #dc2626;
+            border: 1.5px solid #dc2626 !important;
             color: #dc2626;
+        }
+
+        .st-key-file_type_excel button:hover,
+        .st-key-file_type_excel button:focus,
+        .st-key-file_type_excel button:focus-visible,
+        .st-key-file_type_excel button:active {
+            border-color: #16833a !important;
+            outline-color: #16833a !important;
+            box-shadow: none !important;
+        }
+
+        .st-key-file_type_word button:hover,
+        .st-key-file_type_word button:focus,
+        .st-key-file_type_word button:focus-visible,
+        .st-key-file_type_word button:active {
+            border-color: #2563eb !important;
+            outline-color: #2563eb !important;
+            box-shadow: none !important;
+        }
+
+        .st-key-file_type_powerpoint button:hover,
+        .st-key-file_type_powerpoint button:focus,
+        .st-key-file_type_powerpoint button:focus-visible,
+        .st-key-file_type_powerpoint button:active {
+            border-color: #ea580c !important;
+            outline-color: #ea580c !important;
+            box-shadow: none !important;
+        }
+
+        .st-key-file_type_pdf button:hover,
+        .st-key-file_type_pdf button:focus,
+        .st-key-file_type_pdf button:focus-visible,
+        .st-key-file_type_pdf button:active {
+            border-color: #dc2626 !important;
+            outline-color: #dc2626 !important;
+            box-shadow: none !important;
         }
 
         .st-key-file_type_excel button[kind="primary"] {
@@ -594,17 +639,39 @@ def inject_ui_styles() -> None:
             color: white;
         }
 
-        .st-key-query_input input {
-            min-height: 3.4rem;
-            border-radius: 8px;
-            border: 1.5px solid var(--ads-light-blue);
-            background: #f8fafc;
-            font-size: 1.05rem;
+        .ads-query-label {
+            color: var(--ads-ink);
+            font-size: 1rem;
+            font-weight: 800;
+            margin: 0;
+            padding: 0;
         }
 
-        .st-key-query_input input:focus {
-            border-color: var(--ads-light-blue);
-            box-shadow: 0 0 0 0.12rem rgba(127, 187, 221, 0.28);
+        .st-key-query_input {
+            margin-top: -0.35rem;
+            margin-bottom: -0.55rem;
+        }
+
+        .st-key-query_input textarea {
+            min-height: 6.8rem;
+            border-radius: 8px;
+            border: 1.5px solid var(--ads-light-blue) !important;
+            background: var(--ads-soft-blue) !important;
+            font-size: 1.05rem;
+            resize: vertical;
+        }
+
+        .st-key-query_input div[data-baseweb="textarea"] {
+            border-color: var(--ads-light-blue) !important;
+            background: var(--ads-soft-blue) !important;
+        }
+
+        .st-key-query_input textarea:focus,
+        .st-key-query_input textarea:focus-visible,
+        .st-key-query_input div[data-baseweb="textarea"]:focus-within {
+            border-color: var(--ads-orange) !important;
+            outline-color: var(--ads-orange) !important;
+            box-shadow: 0 0 0 0.12rem rgba(245, 139, 5, 0.22) !important;
         }
 
         .st-key-search_button button {
@@ -754,12 +821,12 @@ def inject_ui_styles() -> None:
             margin-top: 0.25rem;
         }
         
-        .ads-after-search-box {
-            height: 1cm;
+        .ads-file-type-spacer {
+            height: 0.05rem;
         }
 
-        .ads-file-type-spacer {
-            height: 0.35rem;
+        .ads-example-spacer {
+            height: 1.5cm;
         }
 
         .ads-reasons li {
@@ -854,12 +921,15 @@ def preset_settings(value: str) -> dict[str, object]:
 def show_empty_state() -> None:
     st.markdown(
         """
+        <div class="ads-example-spacer"></div>
+
         **Example queries**
 
         - ⚡ *Apache関連だった気がするんだけど、Engineering配下にあった年次レポートを探して*
         - 📦 *Find the document discussing open-source ecosystem trends and community growth in 2025.*
         - 👁️ *I'm looking for a telecom-related presentation with revenue graphs and a distinctive magenta corporate design.*
-        """
+        """,
+        unsafe_allow_html=True,
     )
 
 def estimate_vision_calls(
