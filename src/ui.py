@@ -270,11 +270,9 @@ def main() -> None:
         )
 
     if not query:
-        show_empty_state()
-
-    if not query:
         if search_clicked:
-            st.warning("Enter a search memory first.")
+            show_prompt_warning()
+        show_empty_state()
         return
 
     paths = resolve_app_paths(runtime_root)
@@ -353,15 +351,33 @@ def show_cached_response() -> None:
     show_results(response)
 
 
+def show_prompt_warning() -> None:
+    st.markdown(
+        """
+        <div class="ads-inline-warning">
+            Please type a search memory first.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_file_type_buttons() -> set[str]:
-    st.markdown("<div class='ads-file-type-spacer'></div>", unsafe_allow_html=True)
-    st.caption("Optional: narrow the search if you remember the file format")
+    st.markdown(
+        """
+        <div class='ads-file-type-spacer'></div>
+        <div class='ads-file-caption'>
+            Optional: narrow the search if you remember the file format
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
     if "selected_file_types" not in st.session_state:
         st.session_state.selected_file_types = []
 
     selected = set(st.session_state.selected_file_types)
     with st.container(key="file_type_filter"):
-        columns = st.columns(4)
+        columns = st.columns([1, 1, 1.4, 1])
         for column, (file_type, config) in zip(columns, FILE_TYPE_CHOICES.items()):
             is_selected = file_type in selected
             button_label = str(config["label"])
@@ -541,11 +557,16 @@ def inject_ui_styles() -> None:
         :root {
             --ads-blue: #3b82f6;
             --ads-light-blue: #7fbbdd;
-            --ads-soft-blue: #DFEEF6;
+            --ads-soft-blue: #CBE3F1;
             --ads-orange: #f58b05;
             --ads-ink: #111827;
             --ads-muted: #6b7280;
             --ads-border: #d1d5db;
+            --ads-form-font: 1.35rem;
+            --ads-hero-copy-font: 1.5rem;
+            --ads-query-bg: var(--ads-soft-blue);
+            --ads-query-text: var(--ads-ink);
+            --ads-query-placeholder: #4b5563;
         }
 
         div[data-testid="stMetric"] {
@@ -555,6 +576,12 @@ def inject_ui_styles() -> None:
         section[data-testid="stSidebar"],
         section[data-testid="stSidebar"] > div {
             background: var(--ads-soft-blue);
+            color: var(--ads-ink) !important;
+            color-scheme: light;
+        }
+
+        section[data-testid="stSidebar"] * {
+            color: var(--ads-ink) !important;
         }
 
         .st-key-file_type_excel button,
@@ -565,7 +592,7 @@ def inject_ui_styles() -> None:
             border-radius: 8px;
             background: white;
             font-weight: 750;
-            font-size: 1.03rem;
+            font-size: var(--ads-form-font);
             box-shadow: none !important;
         }
 
@@ -584,6 +611,16 @@ def inject_ui_styles() -> None:
         .st-key-file_type_pdf button {
             border: 1.5px solid #dc2626 !important;
             color: #dc2626;
+        }
+
+        .st-key-file_type_excel button p,
+        .st-key-file_type_word button p,
+        .st-key-file_type_powerpoint button p,
+        .st-key-file_type_pdf button p,
+        .st-key-search_button button p {
+            font-size: var(--ads-form-font) !important;
+            line-height: 1.2;
+            white-space: nowrap;
         }
 
         .st-key-file_type_excel button:hover,
@@ -641,14 +678,15 @@ def inject_ui_styles() -> None:
 
         .ads-query-label {
             color: var(--ads-ink);
-            font-size: 1rem;
-            font-weight: 800;
+            color: light-dark(var(--ads-ink), #f9fafb);
+            font-size: var(--ads-form-font) !important;
+            font-weight: 400;
             margin: 0;
             padding: 0;
         }
 
         .st-key-query_input {
-            margin-top: -0.35rem;
+            margin-top: -0.5rem;
             margin-bottom: -0.55rem;
         }
 
@@ -656,22 +694,28 @@ def inject_ui_styles() -> None:
             min-height: 6.8rem;
             border-radius: 8px;
             border: 1.5px solid var(--ads-light-blue) !important;
-            background: var(--ads-soft-blue) !important;
-            font-size: 1.05rem;
+            background: var(--ads-query-bg) !important;
+            color: var(--ads-query-text) !important;
+            font-size: var(--ads-form-font);
             resize: vertical;
+        }
+
+        .st-key-query_input textarea::placeholder {
+            color: var(--ads-query-placeholder);
+            opacity: 1;
         }
 
         .st-key-query_input div[data-baseweb="textarea"] {
             border-color: var(--ads-light-blue) !important;
-            background: var(--ads-soft-blue) !important;
+            background: var(--ads-query-bg) !important;
         }
 
         .st-key-query_input textarea:focus,
         .st-key-query_input textarea:focus-visible,
         .st-key-query_input div[data-baseweb="textarea"]:focus-within {
-            border-color: var(--ads-orange) !important;
-            outline-color: var(--ads-orange) !important;
-            box-shadow: 0 0 0 0.12rem rgba(245, 139, 5, 0.22) !important;
+            border-color: var(--ads-light-blue) !important;
+            outline-color: var(--ads-light-blue) !important;
+            box-shadow: 0 0 0 0.12rem rgba(127, 187, 221, 0.32) !important;
         }
 
         .st-key-search_button button {
@@ -681,13 +725,17 @@ def inject_ui_styles() -> None:
             border-color: var(--ads-orange);
             color: white;
             font-weight: 800;
-            font-size: 1.05rem;
+            font-size: var(--ads-form-font);
         }
 
-        .st-key-search_button button:hover {
-            background: #ea580c;
-            border-color: #ea580c;
-            color: white;
+        .st-key-search_button button:hover,
+        .st-key-search_button button:focus,
+        .st-key-search_button button:focus-visible,
+        .st-key-search_button button:active {
+            background: var(--ads-light-blue) !important;
+            border-color: var(--ads-light-blue) !important;
+            color: white !important;
+            box-shadow: none !important;
         }
 
         .ads-flow {
@@ -798,39 +846,111 @@ def inject_ui_styles() -> None:
         }
         
         .ads-hero {
-            padding: 0.4rem 0 1.2rem;
+            padding: 0.4rem 0 0.25rem;
         }
 
         .ads-hero h1 {
             color: var(--ads-ink);
+            color: light-dark(var(--ads-ink), #f9fafb);
             font-size: 3.2rem;
             line-height: 1.05;
-            margin-bottom: 0.75rem;
+            margin-bottom: 0.45rem;
         }
 
         .ads-hero-main {
             color: var(--ads-orange);
-            font-size: 1.35rem;
+            font-size: var(--ads-hero-copy-font) !important;
             font-weight: 800;
             margin: 0;
+            line-height: 1.22;
         }
 
         .ads-hero-sub {
             color: var(--ads-muted);
-            font-size: 1.05rem;
-            margin-top: 0.25rem;
+            color: light-dark(var(--ads-muted), #d1d5db);
+            font-size: var(--ads-hero-copy-font) !important;
+            margin: 0;
+            line-height: 1.22;
         }
         
         .ads-file-type-spacer {
-            height: 0.05rem;
+            height: 0;
+        }
+
+        .ads-file-caption {
+            color: var(--ads-muted);
+            color: light-dark(var(--ads-muted), #d1d5db);
+            font-size: var(--ads-form-font) !important;
+            font-weight: 400;
+            margin: 0.15rem 0 0.35rem;
+            line-height: 1.25;
         }
 
         .ads-example-spacer {
-            height: 1.5cm;
+            height: 2cm;
+        }
+
+        .ads-inline-warning {
+            max-width: 38rem;
+            margin: 0.8rem auto 0;
+            padding: 0.8rem 1rem;
+            border: 1.5px solid var(--ads-orange);
+            border-radius: 8px;
+            background: #fff7ed;
+            color: #9a3412;
+            font-size: 1rem;
+            font-weight: 600;
+            text-align: center;
         }
 
         .ads-reasons li {
             margin: 0.2rem 0;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            .ads-hero h1 {
+                color: #f9fafb !important;
+            }
+
+            .ads-query-label {
+                color: #f9fafb !important;
+            }
+
+            .ads-hero-sub,
+            .ads-file-caption {
+                color: #d1d5db !important;
+            }
+
+            .st-key-query_input textarea,
+            .st-key-query_input div[data-baseweb="textarea"] {
+                background: var(--ads-query-bg) !important;
+                color: var(--ads-query-text) !important;
+            }
+        }
+
+        html[data-theme="dark"] .ads-hero h1,
+        body[data-theme="dark"] .ads-hero h1,
+        [data-testid="stApp"][data-theme="dark"] .ads-hero h1,
+        [data-color-mode="dark"] .ads-hero h1 {
+            color: #f9fafb !important;
+        }
+
+        html[data-theme="dark"] .ads-query-label,
+        body[data-theme="dark"] .ads-query-label,
+        [data-testid="stApp"][data-theme="dark"] .ads-query-label,
+        [data-color-mode="dark"] .ads-query-label {
+            color: #f9fafb !important;
+        }
+
+        html[data-theme="dark"] .ads-hero-sub,
+        html[data-theme="dark"] .ads-file-caption,
+        body[data-theme="dark"] .ads-hero-sub,
+        body[data-theme="dark"] .ads-file-caption,
+        [data-testid="stApp"][data-theme="dark"] .ads-hero-sub,
+        [data-testid="stApp"][data-theme="dark"] .ads-file-caption,
+        [data-color-mode="dark"] .ads-hero-sub,
+        [data-color-mode="dark"] .ads-file-caption {
+            color: #d1d5db !important;
         }
         </style>
         """,
