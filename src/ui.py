@@ -74,17 +74,27 @@ def main() -> None:
     configure_page()
     inject_ui_styles()
 
-    st.title("Agentic Document Search")
-    st.caption("Find documents the way you remember them.")
-
-    selected_file_types = render_file_type_buttons()
-    selected_extensions = extensions_for_file_types(selected_file_types)
+    st.markdown(
+        """
+        <div class="ads-hero">
+            <h1>Agentic Document Search</h1>
+            <p class="ads-hero-main">Can't remember the filename?</p>
+            <p class="ads-hero-sub">
+                Describe what you remember — filename, content, charts, layout, or visual memory.
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     query = st.text_input(
-        "What do you remember?",
+        "Any clues about the document?",
         placeholder="Example: Apache関連だった気がするんだけど、Engineering配下にあった年次レポートを探して",
         key="query_input",
     )
+    
+    selected_file_types = render_file_type_buttons()
+    selected_extensions = extensions_for_file_types(selected_file_types)
 
     with st.sidebar:
         st.header("Search Settings")
@@ -350,6 +360,7 @@ def show_cached_response() -> None:
 
 def render_file_type_buttons() -> set[str]:
     st.caption("File type")
+    st.caption("Optional: narrow the search if you remember the file format.")
     if "selected_file_types" not in st.session_state:
         st.session_state.selected_file_types = []
 
@@ -725,6 +736,30 @@ def inject_ui_styles() -> None:
         .ads-reasons {
             margin: 0.2rem 0 0.75rem;
             padding-left: 1.1rem;
+        }
+        
+        .ads-hero {
+            padding: 0.4rem 0 1.2rem;
+        }
+
+        .ads-hero h1 {
+            color: var(--ads-ink);
+            font-size: 3.2rem;
+            line-height: 1.05;
+            margin-bottom: 0.75rem;
+        }
+
+        .ads-hero-main {
+            color: var(--ads-orange);
+            font-size: 1.35rem;
+            font-weight: 800;
+            margin: 0;
+        }
+
+        .ads-hero-sub {
+            color: var(--ads-muted);
+            font-size: 1.05rem;
+            margin-top: 0.25rem;
         }
 
         .ads-reasons li {
