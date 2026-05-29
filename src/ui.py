@@ -93,7 +93,7 @@ def main() -> None:
     )
     query = st.text_area(
         label="Any clues about the document?",
-        placeholder="例: Apache関連の年次レポートを探して",
+        placeholder="例: Apache関連のスライドで、昨年度の投資のフローチャートが載ってる",
         key="query_input",
         label_visibility="collapsed",
         height=112,
@@ -541,7 +541,7 @@ def inject_ui_styles() -> None:
         :root {
             --ads-blue: #3b82f6;
             --ads-light-blue: #7fbbdd;
-            --ads-soft-blue: #CBE3F1;
+            --ads-soft-blue: #DFEEF6;
             --ads-orange: #f58b05;
             --ads-ink: #111827;
             --ads-muted: #6b7280;
@@ -925,9 +925,9 @@ def show_empty_state() -> None:
 
         **Example queries**
 
-        - ⚡ *Apache関連だった気がするんだけど、Engineering配下にあった年次レポートを探して*
-        - 📦 *Find the document discussing open-source ecosystem trends and community growth in 2025.*
-        - 👁️ *I'm looking for a telecom-related presentation with revenue graphs and a distinctive magenta corporate design.*
+        - ⚡ *Apache関連だった気がする、Engineering配下にあった年次レポート*
+        - 📦 *A document discussing open-source ecosystem trends and community growth in 2025.*
+        - 👁️ *A telecom-related presentation with revenue graphs and a distinctive magenta corporate design.*
         """,
         unsafe_allow_html=True,
     )
