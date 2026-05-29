@@ -36,12 +36,12 @@ FILE_TYPE_CHOICES = {
     },
     "powerpoint": {
         "label": "PowerPoint",
-        "accent": "#ea580c",
+        "accent": "#ea990c",
         "extensions": {".pptx", ".ppt"},
     },
     "pdf": {
         "label": "PDF",
-        "accent": "#dc2626",
+        "accent": "#ed0b0b",
         "extensions": {".pdf"},
     },
 }
@@ -117,7 +117,7 @@ def main() -> None:
                 help="Inspects extracted text from top candidate files.",
             )
             use_translator = st.toggle(
-                "🌐 Azure Translator",
+                "📖 Azure Translator",
                 value=settings["translator_mode"] == "auto",
                 key=f"{search_mode}_use_translator",
                 help="Expands Japanese queries into English for mixed-language search.",

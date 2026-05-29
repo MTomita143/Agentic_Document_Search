@@ -1,0 +1,15 @@
+[Unit]
+Description=Agentic Document Search CLIP Worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/azureuser/agentic-document-search/vm_worker
+EnvironmentFile=/home/azureuser/agentic-document-search/vm_worker/.env
+ExecStart=/home/azureuser/agentic-document-search/vm_worker/.venv/bin/uvicorn app:app --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
