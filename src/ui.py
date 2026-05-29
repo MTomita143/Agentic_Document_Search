@@ -243,7 +243,7 @@ def main() -> None:
             visual_mode = "never"
             visual_prefilter = "none"
             st.caption("Visual inspection is skipped because no visual-friendly file type is selected.")
-
+    """
     show_cost_notice(
         search_mode,
         orchestration_mode,
@@ -255,8 +255,8 @@ def main() -> None:
         max_visual_files,
         max_visual_pages_per_file,
         max_clip_pages,
-    )
-
+    )    
+    """
     _, search_col, _ = st.columns([1.2, 1, 1.2])
     with search_col:
         search_clicked = st.button(
