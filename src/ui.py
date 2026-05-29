@@ -36,12 +36,12 @@ FILE_TYPE_CHOICES = {
     },
     "powerpoint": {
         "label": "PowerPoint",
-        "accent": "#ea990c",
+        "accent": "#eab30c",
         "extensions": {".pptx", ".ppt"},
     },
     "pdf": {
         "label": "PDF",
-        "accent": "#ed0b0b",
+        "accent": "#fc3535",
         "extensions": {".pdf"},
     },
 }
@@ -82,7 +82,7 @@ def main() -> None:
 
     query = st.text_input(
         "What do you remember?",
-        placeholder="Example: I remember a slide with a blue graph",
+        placeholder="Example: Apache関連だった気がするんだけど、Engineering配下にあった年次レポートを探して",
         key="query_input",
     )
 
@@ -534,7 +534,8 @@ def inject_ui_styles() -> None:
         <style>
         :root {
             --ads-blue: #3b82f6;
-            --ads-blue-soft: #dbeafe;
+            --ads-light-blue: #7fbbdd;
+            --ads-orange: #f58b05;
             --ads-ink: #111827;
             --ads-muted: #6b7280;
             --ads-border: #d1d5db;
@@ -599,15 +600,15 @@ def inject_ui_styles() -> None:
         }
 
         .st-key-query_input input:focus {
-            border-color: #f97316;
+            border-color: var(--ads-orange);
             box-shadow: 0 0 0 0.12rem rgba(249, 115, 22, 0.18);
         }
 
         .st-key-search_button button {
             min-height: 3.25rem;
             border-radius: 8px;
-            background: #f97316;
-            border-color: #f97316;
+            background: var(--ads-orange);
+            border-color: var(--ads-orange);
             color: white;
             font-weight: 800;
             font-size: 1.05rem;
@@ -635,7 +636,7 @@ def inject_ui_styles() -> None:
             padding: 0.62rem 1.2rem 0.62rem 0.85rem;
             min-height: 3.25rem;
             background: white;
-            color: var(--ads-blue);
+            color: var(--ads-light-blue);
             clip-path: polygon(0 0, calc(100% - 18px) 0, 100% 50%, calc(100% - 18px) 100%, 0 100%, 12px 50%);
         }
 
@@ -643,7 +644,7 @@ def inject_ui_styles() -> None:
             content: "";
             position: absolute;
             inset: 0;
-            background: var(--ads-blue);
+            background: var(--ads-light-blue);
             clip-path: inherit;
             z-index: 0;
         }
@@ -663,24 +664,24 @@ def inject_ui_styles() -> None:
         }
 
         .ads-step.done {
-            background: var(--ads-blue);
+            background: var(--ads-light-blue);
             color: white;
         }
 
         .ads-step.active,
         .ads-step.current {
-            background: #f97316;
+            background: var(--ads-orange);
             color: white;
         }
 
         .ads-step.done::before,
         .ads-step.done::after {
-            background: var(--ads-blue);
+            background: var(--ads-light-blue);
         }
 
         .ads-step.current::before,
         .ads-step.current::after {
-            background: #f97316;
+            background: var(--ads-orange);
         }
 
         .ads-step-name {
@@ -818,17 +819,13 @@ def preset_settings(value: str) -> dict[str, object]:
 def show_empty_state() -> None:
     st.markdown(
         """
-        **Good demo queries**
+        **Example queries**
 
-        - `Find the investor presentation deck`
-        - `Find a report about open source`
-        - `Find the document that talks about telecom`
-        - `I remember a slide with a blue graph`
-        - `売上分析のレポートを探して`
-        - `青いグラフがある資料`
+        - ⚡ *Apache関連だった気がするんだけど、Engineering配下にあった年次レポートを探して*
+        - 📦 *Find the document discussing open-source ecosystem trends and community growth in 2025.*
+        - 👁️ *I'm looking for a telecom-related presentation with revenue graphs and a distinctive magenta corporate design.*
         """
     )
-
 
 def show_cost_notice(
     search_mode: str,
