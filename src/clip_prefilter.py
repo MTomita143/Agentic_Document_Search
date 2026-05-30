@@ -239,6 +239,9 @@ def load_clip_runtime(model_name: str) -> tuple[Any, Any]:
     os.environ.setdefault("HF_HOME", str(model_cache_dir))
     os.environ.setdefault("SENTENCE_TRANSFORMERS_HOME", str(model_cache_dir))
     os.environ.setdefault("TRANSFORMERS_CACHE", str(model_cache_dir / "transformers"))
+    if os.getenv("ADS_ALLOW_CLIP_DOWNLOAD", "").lower() not in {"1", "true", "yes"}:
+        os.environ.setdefault("HF_HUB_OFFLINE", "1")
+        os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
     try:
         from PIL import Image

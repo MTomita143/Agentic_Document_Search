@@ -18,7 +18,7 @@ import streamlit as st
 from agent import run_agent
 from document_store import resolve_document_path
 from ingest import collect_azure_blob_metadata, collect_file_metadata, save_json
-from search import DEFAULT_INDEX_PATH, load_environment
+from search import DEFAULT_INDEX_PATH, has_cjk, load_environment
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -57,7 +57,7 @@ FLOW_STEPS = [
     ("Azure AI Search", "AI Search"),
     ("Inspect Content", "Read text"),
     ("Content LLM Rerank", "Deep reading"),
-    ("CLIP Visual Prefilter", "Visual filter"),
+    ("CLIP Visual Prefilter", "Visual skim"),
     ("Inspect Visuals", "Check pages"),
     ("Return Answer", "Answer"),
 ]
@@ -210,28 +210,24 @@ def main() -> None:
                 key=f"{search_mode}_max_visual_pages_per_file",
             )
             max_clip_pages = st.slider(
-                "CLIP pages for Vision",
+                "Visual pages to skim per file",
                 1,
                 60,
                 settings["max_clip_pages"],
                 key=f"{search_mode}_max_clip_pages",
+                help="How many pages per candidate file the hybrid visual funnel should skim before Azure Vision.",
             )
             if use_clip:
                 requested_clip_pages = max_clip_pages
-                minimum_clip_pages = (
-                    max_visual_files * max_visual_pages_per_file
-                    if use_vision
-                    else max_visual_pages_per_file
-                )
+                minimum_clip_pages = max_visual_pages_per_file
                 max_clip_pages = max(max_clip_pages, minimum_clip_pages)
                 st.caption(
-                    f"📎 CLIP will select up to {max_clip_pages} pages; "
+                    f"📎 The visual funnel will skim up to {max_clip_pages} pages per file; "
                     f"Azure Vision will inspect at most {max_visual_pages_per_file} per file."
                 )
                 if max_clip_pages != requested_clip_pages:
                     st.caption(
-                        "📎 CLIP page count was auto-adjusted so the visual "
-                        "inspection budget does not exceed the CLIP funnel."
+                        "📎 Skim budget was auto-adjusted so Azure Vision has enough selected pages."
                     )
 
         mode = "llm" if use_llm else "local"
@@ -1219,6 +1215,14 @@ def hex_to_rgb(value: str) -> tuple[int, int, int]:
 
 
 def clean_display_reasons(reasons: list[str]) -> list[str]:
+    if any(has_cjk(reason) for reason in reasons):
+        cleaned = []
+        for reason in reasons:
+            compact = trim_reason(reason)
+            if compact and compact not in cleaned:
+                cleaned.append(compact)
+        return cleaned[:5]
+
     buckets: dict[str, list[str]] = {
         "visual": [],
         "content": [],
@@ -1343,41 +1347,55 @@ def show_page_preview(result: object) -> None:
         return
 
     preview_pages = extract_preview_pages(result.reasons)
-    preview_label = (
-        "Hide preview"
-        if st.session_state.get(f"preview_{record.get('file_id')}_visible", True)
-        else "Show selected page"
-        if preview_pages != [1]
-        else "Show first page"
-    )
-    key = f"preview_{record.get('file_id')}"
-    visible_key = f"{key}_visible"
-    if visible_key not in st.session_state:
-        st.session_state[visible_key] = True
-    if st.button(preview_label, key=key):
-        st.session_state[visible_key] = not st.session_state[visible_key]
-
-    if not st.session_state.get(visible_key, True):
-        return
+    visual_panel = has_visual_evidence(result.reasons)
 
     try:
-        image_paths = render_preview_pages(record, preview_pages[:2])
+        image_paths = render_preview_pages(record, preview_pages[:4])
     except Exception as error:
         st.warning(f"Could not render preview: {error}")
         return
 
-    for image_path, page_number in image_paths:
-        st.image(
-            str(image_path),
-            caption=f"Page {page_number}",
-            use_container_width=True,
+    if not image_paths:
+        return
+
+    title = "Visual investigation" if visual_panel else "Preview"
+    st.markdown(f"**{title}**")
+    columns = st.columns(min(len(image_paths), 4))
+    for column, (image_path, page_number) in zip(columns, image_paths):
+        with column:
+            st.image(
+                str(image_path),
+                caption=(
+                    f"Inspected page {page_number}"
+                    if visual_panel
+                    else f"Page {page_number}"
+                ),
+                use_container_width=True,
+            )
+
+
+def has_visual_evidence(reasons: list[str]) -> bool:
+    return any(
+        marker in reason
+        for reason in reasons
+        for marker in (
+            "Visual page candidates:",
+            "Visual analysis matched:",
+            "visual observation",
+            "visual skim",
         )
+    )
 
 
 def extract_preview_pages(reasons: list[str]) -> list[int]:
     pages: list[int] = []
     for reason in reasons:
-        if "CLIP selected visual pages:" in reason or "Visual page candidates:" in reason:
+        if (
+            "CLIP selected visual pages:" in reason
+            or "Visual page candidates:" in reason
+            or "local visual skim selected pages:" in reason
+            or ("視覚" in reason and "ページ" in reason)
+        ):
             pages.extend(int(value) for value in re.findall(r"\d+", reason))
         else:
             pages.extend(

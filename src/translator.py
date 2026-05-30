@@ -1,8 +1,9 @@
 """
 Optional Azure AI Translator query expansion.
 
-This module translates user queries into English when useful, so Japanese prompts
-can still match English filenames, folders, and extracted document text.
+This module expands user queries across Japanese and English when useful, so
+Japanese prompts can match English files and English prompts can still find
+Japanese documents.
 """
 
 from __future__ import annotations
@@ -33,10 +34,15 @@ class QueryTranslation:
 
 
 def should_translate_query(query: str) -> bool:
-    return has_cjk(query)
+    return bool(query.strip())
+
+
+def target_language_for_query(query: str) -> str:
+    return "en" if has_cjk(query) else "ja"
 
 
 def expand_query_with_translator(query: str) -> QueryTranslation:
+    target_language = target_language_for_query(query)
     if not should_translate_query(query):
         return QueryTranslation(
             original_query=query,
@@ -58,7 +64,10 @@ def expand_query_with_translator(query: str) -> QueryTranslation:
         )
 
     try:
-        translated_query, detected_language = translate_text(query, to_language="en")
+        translated_query, detected_language = translate_text(
+            query,
+            to_language=target_language,
+        )
     except RuntimeError as error:
         return QueryTranslation(
             original_query=query,

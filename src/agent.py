@@ -33,10 +33,12 @@ from content import (
     inspect_content_for_results,
 )
 from content_reranker import rerank_with_content_azure_openai
+from reason_localizer import localize_reasons_to_japanese
 from search import (
     DEFAULT_INDEX_PATH,
     SearchResult,
     dedupe,
+    has_cjk,
     load_environment,
     load_index,
     normalize_text,
@@ -59,6 +61,7 @@ from visual import (
     inspect_visuals_for_results,
     missing_vision_config,
 )
+from visual_profile import rank_visual_pages_with_profile
 from visual_worker_client import (
     missing_visual_worker_config,
     rank_visual_pages_with_worker,
@@ -305,15 +308,13 @@ def run_agent(
 
     if mode == "llm" and candidate_pool_size < top_k:
         candidate_pool_size = top_k
-    if (
-        visual_prefilter == "clip"
-        and max_clip_pages < max_visual_files * max_visual_pages_per_file
-    ):
-        max_clip_pages = max_visual_files * max_visual_pages_per_file
+    if visual_prefilter == "clip" and max_clip_pages < max_visual_pages_per_file:
+        max_clip_pages = max_visual_pages_per_file
 
     emit_progress(steps, step_callback, "Translate Query")
     translation = prepare_query_translation(query, translator_mode)
     search_query = translation.expanded_query
+    clip_query = build_clip_query(query, translation)
     query_understanding = understand_query(search_query)
     query_understanding.query = query
 
@@ -469,42 +470,83 @@ def run_agent(
 
     selected_visual_pages: dict[str, list[int]] | None = None
     clip_prefilter_failed = False
+    profile_evidence: list[ClipEvidence] = []
+    clip_evidence: list[ClipEvidence] = []
+    clip_error: str | None = None
 
     emit_progress(steps, step_callback, "CLIP Visual Prefilter")
     if should_run_clip_prefilter(query_understanding, results, visual_prefilter):
+        top_pages_for_vision = max_visual_files * max_visual_pages_per_file
+        profile_evidence, selected_visual_pages = rank_visual_pages_with_profile(
+            query=search_query,
+            results=results,
+            max_files=max_visual_files,
+            max_pages_per_file=max_clip_pages,
+            top_pages=top_pages_for_vision,
+            selected_pages_per_file=max_visual_pages_per_file,
+        )
+        apply_clip_evidence(results, profile_evidence)
+        evidence_scope = f"{evidence_scope} + local visual page skim"
+
         try:
             if missing_visual_worker_config():
-                clip_evidence, selected_visual_pages = rank_visual_pages_with_clip(
-                    query=search_query,
+                clip_evidence, clip_selected_pages = rank_visual_pages_with_clip(
+                    query=clip_query,
                     results=results,
                     max_files=max_visual_files,
-                    max_pages_per_file=max_visual_pages_per_file,
-                    top_pages=max_clip_pages,
+                    max_pages_per_file=max_clip_pages,
+                    top_pages=top_pages_for_vision,
                     cache_path=clip_cache_path,
+                )
+                selected_visual_pages = merge_visual_page_candidates(
+                    selected_visual_pages,
+                    clip_selected_pages,
+                    max_pages_per_file=max_visual_pages_per_file,
                 )
                 evidence_scope = f"{evidence_scope} + local CLIP page prefilter"
             else:
-                clip_evidence, selected_visual_pages = rank_visual_pages_with_worker(
-                    query=search_query,
+                clip_evidence, clip_selected_pages = rank_visual_pages_with_worker(
+                    query=clip_query,
                     results=results,
                     max_files=max_visual_files,
+                    max_pages_per_file=max_clip_pages,
+                    top_pages=top_pages_for_vision,
+                )
+                selected_visual_pages = merge_visual_page_candidates(
+                    selected_visual_pages,
+                    clip_selected_pages,
                     max_pages_per_file=max_visual_pages_per_file,
-                    top_pages=max_clip_pages,
                 )
                 evidence_scope = f"{evidence_scope} + GPU VM CLIP page prefilter"
 
-            apply_clip_evidence(results, clip_evidence)
+            apply_clip_evidence(
+                results,
+                clip_evidence,
+                include_page_candidates=False,
+                include_observations=False,
+                score_reason="CLIP reinforced visual relevance",
+            )
             results = sorted(results, key=lambda result: result.score, reverse=True)[:top_k]
-            add_step(steps, make_clip_step(clip_evidence, max_clip_pages), step_callback)
         except RuntimeError as error:
             clip_prefilter_failed = True
-            add_step(steps, make_clip_error_step(str(error)), step_callback)
+            clip_error = str(error)
+
+        results = sorted(results, key=lambda result: result.score, reverse=True)[:top_k]
+        add_step(
+            steps,
+            make_hybrid_visual_prefilter_step(
+                profile_evidence=profile_evidence,
+                clip_evidence=clip_evidence,
+                clip_error=clip_error,
+            ),
+            step_callback,
+        )
     elif query_understanding.should_inspect_visuals:
         add_step(steps, make_clip_skipped_step(visual_prefilter), step_callback)
 
     emit_progress(steps, step_callback, "Inspect Visuals")
     if should_run_visual_inspection(query_understanding, results, visual_mode):
-        if clip_prefilter_failed and visual_prefilter == "clip":
+        if clip_prefilter_failed and visual_prefilter == "clip" and not selected_visual_pages:
             add_step(steps, make_visual_blocked_by_clip_step(), step_callback)
         else:
             missing_visual_config = missing_vision_config()
@@ -535,6 +577,11 @@ def run_agent(
     normalize_result_scores(results)
     add_step(steps, make_answer_step(results), step_callback)
     remember_search(query, results, search_memory_path)
+    localize_reasons_to_japanese(
+        query=query,
+        results=results,
+        detected_language=translation.detected_language,
+    )
 
     return AgentResponse(
         query_understanding=query_understanding,
@@ -562,6 +609,31 @@ def emit_progress(
         step_callback(list(steps), current_step)
 
 
+def merge_visual_page_candidates(
+    primary: dict[str, list[int]] | None,
+    secondary: dict[str, list[int]] | None,
+    max_pages_per_file: int,
+) -> dict[str, list[int]]:
+    merged: dict[str, list[int]] = {
+        file_id: list(pages)
+        for file_id, pages in (primary or {}).items()
+    }
+
+    for file_id, pages in (secondary or {}).items():
+        current = merged.setdefault(file_id, [])
+        for page_number in pages:
+            if page_number not in current:
+                current.append(page_number)
+            if len(current) >= max_pages_per_file:
+                break
+
+    return {
+        file_id: pages[:max_pages_per_file]
+        for file_id, pages in merged.items()
+        if pages
+    }
+
+
 def prepare_query_translation(query: str, translator_mode: str) -> QueryTranslation:
     if translator_mode == "never":
         return QueryTranslation(
@@ -573,6 +645,12 @@ def prepare_query_translation(query: str, translator_mode: str) -> QueryTranslat
         )
 
     return expand_query_with_translator(query)
+
+
+def build_clip_query(query: str, translation: QueryTranslation) -> str:
+    if translation.translated_query and has_cjk(query):
+        return translation.translated_query
+    return query
 
 
 def make_translation_step(
@@ -930,6 +1008,50 @@ def make_clip_step(
     )
 
 
+def make_hybrid_visual_prefilter_step(
+    profile_evidence: list[ClipEvidence],
+    clip_evidence: list[ClipEvidence],
+    clip_error: str | None,
+) -> AgentStep:
+    combined_evidence = profile_evidence + clip_evidence
+    rendered_files = len({evidence.file_id for evidence in combined_evidence})
+    rendered_pages = sum(evidence.rendered_pages for evidence in profile_evidence)
+    selected_pages = sum(len(evidence.selected_pages) for evidence in profile_evidence)
+    clip_selected_pages = sum(len(evidence.selected_pages) for evidence in clip_evidence)
+    errors = [
+        evidence.error
+        for evidence in combined_evidence
+        if evidence.error
+    ]
+
+    status = "done"
+    notes = []
+    if clip_error:
+        status = "partial" if selected_pages else "deferred"
+        notes.append(
+            "CLIP was unavailable, so the local visual skim selected pages instead."
+        )
+    if errors:
+        status = "partial"
+        notes.append("Some files were skipped: " + "; ".join(errors))
+
+    detail = (
+        f"Hybrid visual skim reviewed {rendered_pages} pages from "
+        f"{rendered_files} files using local text, layout, chart/table, and "
+        f"color clues. Selected {selected_pages} pages for visual inspection."
+    )
+    if clip_selected_pages:
+        detail += f" CLIP added {clip_selected_pages} page signals."
+    if notes:
+        detail += " " + " ".join(notes)
+
+    return AgentStep(
+        name="CLIP Visual Prefilter",
+        status=status,
+        detail=detail,
+    )
+
+
 def make_clip_error_step(error: str) -> AgentStep:
     if "GPU CLIP worker" in error or "CLIP_WORKER_URL" in error:
         detail = (
@@ -1081,6 +1203,9 @@ def filter_snippets_for_terms(snippets: list[str], terms: list[str]) -> list[str
 def apply_clip_evidence(
     results: list[SearchResult],
     clip_evidence: list[ClipEvidence],
+    include_page_candidates: bool = True,
+    include_observations: bool = True,
+    score_reason: str | None = None,
 ) -> None:
     evidence_by_file_id = {
         evidence.file_id: evidence
@@ -1100,10 +1225,19 @@ def apply_clip_evidence(
             continue
 
         result.score += evidence.score
-        result.reasons.append(
-            "Visual page candidates: "
-            + ", ".join(str(page) for page in evidence.selected_pages)
-        )
+        if include_page_candidates:
+            result.reasons.append(
+                "Visual page candidates: "
+                + ", ".join(str(page) for page in evidence.selected_pages)
+            )
+        elif score_reason:
+            result.reasons.append(score_reason)
+
+        if include_observations:
+            for observation in evidence.observations[:2]:
+                if "CLIP similarity" in observation:
+                    continue
+                result.reasons.append("visual skim " + observation)
 
 
 def apply_visual_evidence(
