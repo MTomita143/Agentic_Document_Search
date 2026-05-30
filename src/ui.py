@@ -18,6 +18,7 @@ import streamlit as st
 from agent import run_agent
 from document_store import resolve_document_path
 from ingest import collect_azure_blob_metadata, collect_file_metadata, save_json
+from reason_localizer import translate_reason_with_template
 from search import DEFAULT_INDEX_PATH, has_cjk, load_environment
 
 
@@ -1219,6 +1220,8 @@ def clean_display_reasons(reasons: list[str]) -> list[str]:
         cleaned = []
         for reason in reasons:
             compact = trim_reason(reason)
+            if compact and not has_cjk(compact):
+                compact = translate_reason_with_template(compact)
             if compact and compact not in cleaned:
                 cleaned.append(compact)
         return cleaned[:5]

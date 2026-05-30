@@ -52,10 +52,45 @@ def localize_reasons_to_japanese(
         if not isinstance(reasons, list):
             result.reasons = translate_reason_list_with_templates(result.reasons)
             continue
-        cleaned = [str(reason).strip() for reason in reasons if str(reason).strip()]
+        cleaned = enforce_japanese_reasons(
+            original_reasons=result.reasons,
+            localized_reasons=[str(reason).strip() for reason in reasons if str(reason).strip()],
+        )
         result.reasons = dedupe(cleaned)[:5] or translate_reason_list_with_templates(
             result.reasons
         )
+
+
+def enforce_japanese_reasons(
+    original_reasons: list[str],
+    localized_reasons: list[str],
+) -> list[str]:
+    fixed: list[str] = []
+    for index, reason in enumerate(localized_reasons):
+        if looks_japanese(reason):
+            fixed.append(reason)
+            continue
+
+        source_reason = (
+            original_reasons[index]
+            if index < len(original_reasons)
+            else reason
+        )
+        translated = translate_reason_with_template(source_reason)
+        if not looks_japanese(translated):
+            translated = translate_reason_with_template(reason)
+        if not looks_japanese(translated):
+            translated = generic_japanese_reason(reason)
+        if translated:
+            fixed.append(translated)
+
+    if fixed:
+        return fixed
+    return translate_reason_list_with_templates(original_reasons)
+
+
+def looks_japanese(text: str) -> bool:
+    return has_cjk(text)
 
 
 def localize_with_azure_openai(
@@ -66,7 +101,7 @@ def localize_with_azure_openai(
     if localization_mode in {"template", "templates", "local", "off", "never"}:
         raise RuntimeError("Azure OpenAI reason localization is disabled.")
 
-    if missing_azure_openai_config("fast"):
+    if missing_azure_openai_config("deep"):
         raise RuntimeError("Azure OpenAI is not configured for reason localization.")
 
     try:
@@ -86,9 +121,9 @@ def localize_with_azure_openai(
     attempted_deployments: list[str] = []
     last_deployment_error: Exception | None = None
 
-    for deployment in deployment_candidates("fast"):
+    for deployment in deployment_candidates("deep"):
         attempted_deployments.append(deployment)
-        config = get_azure_openai_config("fast", deployment=deployment)
+        config = get_azure_openai_config("deep", deployment=deployment)
         client = AzureOpenAI(
             api_version=config.api_version,
             azure_endpoint=config.endpoint,
@@ -101,9 +136,14 @@ def localize_with_azure_openai(
                         "role": "system",
                         "content": (
                             "You rewrite document-search evidence into concise Japanese. "
+                            "Every output reason must be natural Japanese. "
+                            "Do not leave English explanatory sentences such as "
+                            "'Content snippets indicate...' or 'Matched terms include...'. "
                             "Use only the provided evidence. Do not invent content. "
                             "Do not translate file names, paths, product names, page numbers, "
-                            "or company names. Avoid technical scores, cache details, and "
+                            "company names, or evidence keywords such as FIGURE 1, Apache, "
+                            "chart, table, CLIP, or Azure Vision. Explain those keywords in Japanese. "
+                            "Avoid technical scores, cache details, and "
                             "model names unless the evidence specifically says a visual model "
                             "supported the match. Return strict JSON only."
                         ),
@@ -152,12 +192,12 @@ def localize_with_azure_openai(
     if last_deployment_error:
         raise RuntimeError(
             format_deployment_not_found_message(
-                "fast",
+                "deep",
                 attempted_deployments,
                 last_deployment_error,
             )
         )
-    raise RuntimeError("Azure OpenAI fast deployment is not configured.")
+    raise RuntimeError("Azure OpenAI deep deployment is not configured.")
 
 
 def localize_with_templates(results: list[SearchResult]) -> list[dict[str, Any]]:
@@ -210,6 +250,37 @@ def translate_reason_with_template(reason: str) -> str:
         snippet = reason.replace("content snippet ", "", 1)
         return f"本文の抜粋が手がかりと一致しました: {trim_japanese(snippet)}"
 
+    lower = reason.lower()
+    if lower.startswith("content snippets and text samples reference"):
+        figures = ", ".join(re.findall(r"FIGURE\s+\d+", reason, flags=re.IGNORECASE))
+        quoted_terms = ", ".join(
+            clean_reason_term(term)
+            for term in re.findall(r"'([^']+)'", reason)
+        )
+        parts = []
+        if figures:
+            parts.append(f"{figures} への言及")
+        if quoted_terms:
+            parts.append(f"「{quoted_terms}」への言及")
+        detail = "や".join(parts) if parts else "図表に関する表現"
+        return f"本文サンプルに{detail}があり、図表を含む可能性があります。"
+
+    if lower.startswith("matched terms include"):
+        terms = [
+            clean_reason_term(term)
+            for term in re.findall(r"'([^']+)'", reason)
+        ]
+        if terms:
+            return (
+                "メタデータや本文の抜粋で"
+                + "、".join(f"「{term}」" for term in terms[:5])
+                + "が一致しました。"
+            )
+        return "メタデータや本文の抜粋に検索の手がかりと一致する語がありました。"
+
+    if lower.startswith("text samples") or lower.startswith("content samples"):
+        return "本文サンプルが検索の手がかりと一致しました。"
+
     if reason.startswith("search memory:") or reason.startswith("previously appeared"):
         return "過去の似た検索でもこのファイルが候補に出ていました。"
 
@@ -233,7 +304,26 @@ def translate_reason_with_template(reason: str) -> str:
     if has_cjk(reason):
         return reason
 
-    return trim_japanese(reason)
+    return generic_japanese_reason(reason)
+
+
+def generic_japanese_reason(reason: str) -> str:
+    lower = reason.lower()
+    if "figure" in lower or "chart" in lower or "graph" in lower or "diagram" in lower:
+        return "本文や視覚的な手がかりから、図表に関連する資料だと判断しました。"
+    if "metadata" in lower or "filename" in lower or "folder" in lower or "path" in lower:
+        return "ファイル名・フォルダ・パスなどのメタデータが検索の手がかりと一致しました。"
+    if "snippet" in lower or "text" in lower or "content" in lower:
+        return "抽出した本文が検索の手がかりと一致しました。"
+    if "visual" in lower or "page" in lower:
+        return "視覚的に関連しそうなページが見つかりました。"
+    if "memory" in lower or "previous" in lower:
+        return "過去の似た検索でもこのファイルが候補に出ていました。"
+    return "検索の手がかりと一致する根拠が見つかりました。"
+
+
+def clean_reason_term(term: str) -> str:
+    return term.replace("(s)", "").strip()
 
 
 def parse_visual_pages(reason: str) -> str:
