@@ -1,49 +1,209 @@
 # Agentic Document Search
-🌟Find Documents the Way You Remember Them
 
-Instead of relying on exact keywords, this AI agent searches documents the way humans do — through vague memory, visual cues, and iterative exploration.
+**Find Documents the Way You Remember Them**
 
-## Concept
+Agentic Document Search is a hackathon MVP for finding documents from vague
+memory, not only exact filenames or keywords.
 
-A human-like search process:
-
-```text
-Vague recall (name, context, or topic)
-→ Narrow down candidates
-→ Look inside documents
-→ Use visual signals (charts, layouts, slides)
-→ Refine the search iteratively
-→ Return the most relevant results with reasoning
-```
-
-## Project Structure
+People often remember work documents like this:
 
 ```text
-./
-├── data/
-│   └── raw/
-│       └── put your pdf/pptx/docx files here
-├── indexes/
-│   └── files_index.json
-├── src/
-│   └── ingest.py
-├── .gitignore
-└── README.md
+"the PDF about telecom with graphs"
+"the investor presentation deck"
+"the report that mentioned Apache and charts"
+"青いグラフがあった資料"
 ```
 
-## Usage
+This project turns that kind of memory into an agentic search loop:
 
-Put documents under:
 ```text
-data/raw/
+Vague recall
+→ lightweight metadata narrowing
+→ candidate-only text inspection
+→ optional visual page selection
+→ optional Azure Vision verification
+→ ranked results with reasons
 ```
 
-Run:
-```bash
-python3 src/ingest.py --data-dir data/raw --output indexes/files_index.json
+The core principle is:
+
+```text
+Cheap first, expensive only when useful.
 ```
 
-The generated file index stores only canonical fields:
+The agent does not deeply process every document upfront. It starts with
+filenames, folder paths, file type, and previous search memory, then opens only
+the most likely candidate files.
+
+## Current Architecture
+
+```text
+User
+  ↓
+Streamlit UI
+  ↓
+Agent controller
+  ↓
+Semantic Kernel auto mode
+  ↓
+Azure Translator query expansion
+  ↓
+Fast Azure OpenAI metadata reasoning
+  ↓
+Search memory + optional Azure AI Search
+  ↓
+Candidate-only text extraction
+  ↓
+Deep Azure OpenAI content reasoning
+  ↓
+Hybrid visual page selection
+  ↓
+Optional CLIP / GPU VM worker
+  ↓
+Optional Azure Vision verification
+  ↓
+Explained result
+```
+
+Azure deployment shape:
+
+```text
+Azure App Service
+  Streamlit UI + agent controller
+
+Azure Blob Storage
+  Cloud document source for demo/deployment
+
+Azure VM / Azure GPU VM
+  Optional home for heavier local workers; current worker runs CLIP page ranking
+
+Microsoft Foundry / Azure OpenAI
+  Query planning, metadata reranking, content reranking, Japanese reason rewriting
+
+Azure AI Vision
+  Visual verification for selected rendered pages
+
+Azure AI Translator
+  Japanese/English query expansion for mixed-language search
+
+Azure AI Search
+  Optional candidate retrieval tool, not the main product logic
+
+Semantic Kernel
+  Auto mode orchestration: chooses which tools to use for the query
+```
+
+Future enterprise source:
+
+```text
+OneDrive / SharePoint / Microsoft Graph
+  Real company document source-of-truth
+```
+
+The product is not "upload every document into a new AI database." The product
+is a policy-aware document search agent that can investigate approved company
+storage with bounded computation.
+
+## What Makes It Agentic
+
+Normal search usually does this:
+
+```text
+query → retrieve → return results
+```
+
+This project does this:
+
+```text
+query
+→ decide strategy
+→ search metadata
+→ remember previous investigations
+→ inspect only candidate files
+→ inspect visual pages only when the query needs it
+→ compare evidence
+→ explain why each file matched
+```
+
+Azure AI Search can be used as one retrieval tool, but the agentic behavior is
+the orchestration around it: deciding when to use metadata, text, memory,
+translation, CLIP, Vision, and deep reranking.
+
+## Search Modes
+
+The Streamlit UI exposes four modes:
+
+```text
+Auto Search
+  Semantic Kernel chooses the search strategy.
+
+Filename Search
+  Filenames, folders, and file details. No file content inspection.
+
+Content Search
+  Metadata search + Azure OpenAI reranking + candidate text inspection.
+
+Visual Search
+  Content Search + hybrid visual page selection + optional CLIP/Azure Vision.
+```
+
+File type buttons can narrow the candidate set before search:
+
+```text
+Excel | Word | PowerPoint | PDF
+```
+
+Visual inspection is useful for PDF/slide-like files. Word and Excel searches
+lean on text extraction and LLM reasoning instead.
+
+## Agent Flow
+
+The current agent can run these steps:
+
+```text
+1. File type filter
+2. Semantic Kernel auto-mode planning
+3. Azure Translator query expansion
+4. Query understanding
+5. Metadata search
+6. Azure OpenAI metadata rerank
+7. Search memory recall
+8. Optional Azure AI Search retrieval
+9. Candidate text extraction
+10. Local OCR fallback for scanned PDF pages
+11. Deep Azure OpenAI content rerank
+12. Local visual page skim
+13. Optional CLIP page prefilter
+14. Optional Azure Vision page verification
+15. Japanese/English reason rendering
+```
+
+The UI shows completed/current steps during search so the demo reads like an
+investigation, not a black-box lookup.
+
+## Language Strategy
+
+The app supports Japanese, English, and mixed Japanese/English documents.
+
+The internal search path prefers English when using LLM/Vision/CLIP because
+those models tend to be more stable on English visual and semantic cues. When
+the user prompt is Japanese:
+
+```text
+Japanese prompt
+→ Azure Translator expands the query
+→ search uses Japanese + English clues
+→ CLIP uses the English visual query when available
+→ Azure OpenAI deep deployment rewrites reasons in Japanese
+```
+
+The UI stays in English, but `Why this matched` is rendered in Japanese for
+Japanese prompts. Filenames, company names, paths, and evidence terms such as
+`FIGURE 1`, `Apache`, `chart`, `CLIP`, and `Azure Vision` are preserved.
+
+## Metadata Design
+
+The file index stores only canonical fields:
 
 ```json
 {
@@ -55,14 +215,171 @@ The generated file index stores only canonical fields:
 }
 ```
 
-Filename, extension, parent folders, type label, display size, and local paths
-are derived at load time. This keeps the index portable when the source moves
-from a local folder to Azure Blob Storage.
+Filename, extension, folder names, type labels, display size, and local paths
+are derived at load time. This keeps the index portable when moving from a
+local folder to Azure Blob Storage.
 
-File size is kept only for display and cache invalidation. It is not used as a
-ranking signal because it is usually a weak reason for human-memory search.
+File size is kept for display and cache invalidation, not as a primary ranking
+reason. It is usually a weak signal for human-memory search.
 
-Optional Azure Blob ingestion:
+Refresh the index after files are added, deleted, renamed, or moved.
+
+## Data Efficiency
+
+The project uses two memory layers:
+
+```text
+Lazy file cache
+  extracted text, OCR output, rendered page info, CLIP embeddings, Vision output
+
+Search memory
+  previous query, recalled documents, timestamp, and short reason summary
+```
+
+This is intentionally different from permanent visual labeling. A human does
+not label every page in advance; they remember what they already investigated
+and start from similar clues next time.
+
+## Project Structure
+
+```text
+.
+├── data/
+│   └── raw/
+│       └── company-drive/
+├── indexes/
+│   ├── files_index.json
+│   ├── content_cache.json
+│   ├── visual_cache.json
+│   ├── clip_cache.json
+│   └── search_memory.json
+├── src/
+│   ├── agent.py
+│   ├── ingest.py
+│   ├── search.py
+│   ├── content.py
+│   ├── visual.py
+│   ├── visual_profile.py
+│   ├── clip_prefilter.py
+│   ├── visual_worker_client.py
+│   ├── semantic_kernel_auto.py
+│   ├── translator.py
+│   ├── reason_localizer.py
+│   └── ui.py
+├── vm_worker/
+│   └── app.py
+├── requirements.txt
+├── requirements-clip.txt
+├── requirements-semantic-kernel.txt
+└── .env.example
+```
+
+## Local Setup
+
+Create a virtual environment and install the base app:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install -r requirements.txt
+```
+
+Optional Semantic Kernel auto mode:
+
+```bash
+.venv/bin/python -m pip install -r requirements-semantic-kernel.txt
+```
+
+Optional local CLIP:
+
+```bash
+.venv/bin/python -m pip install -r requirements-clip.txt
+```
+
+CLIP is optional because it is heavier than the base Streamlit app. If you use
+it locally, model files are cached under `indexes/model_cache/huggingface` by
+default.
+
+## Environment
+
+Start from `.env.example` and create a local `.env` file.
+
+Core Azure settings:
+
+```bash
+AZURE_OPENAI_ENDPOINT="https://YOUR-RESOURCE.cognitiveservices.azure.com/"
+AZURE_OPENAI_API_KEY="YOUR-KEY"
+AZURE_OPENAI_FAST_DEPLOYMENT="gpt-5.4-mini"
+AZURE_OPENAI_DEEP_DEPLOYMENT="gpt-5.4"
+AZURE_OPENAI_API_VERSION="2024-12-01-preview"
+
+AZURE_BLOB_CONTAINER_URL="https://YOUR-STORAGE.blob.core.windows.net/YOUR-CONTAINER?YOUR-SAS"
+AZURE_TRANSLATOR_REGION="YOUR-AZURE-AI-RESOURCE-REGION"
+```
+
+The deployment names must match the names in Azure AI Foundry exactly. The
+deployment name can differ from the model name.
+
+Vision and Translator reuse the Foundry endpoint/key by default when they live
+in the same Azure AI resource:
+
+```bash
+AZURE_VISION_API_VERSION="2024-02-01"
+AZURE_VISION_FEATURES="caption,denseCaptions,tags,read,objects"
+AZURE_TRANSLATOR_API_VERSION="3.0"
+```
+
+Use separate service-specific keys only if those services live in separate
+Azure resources:
+
+```bash
+# AZURE_VISION_ENDPOINT="https://YOUR-SEPARATE-VISION-RESOURCE.cognitiveservices.azure.com/"
+# AZURE_VISION_KEY="YOUR-SEPARATE-VISION-KEY"
+# AZURE_TRANSLATOR_KEY="YOUR-SEPARATE-TRANSLATOR-KEY"
+```
+
+Optional Azure AI Search:
+
+```bash
+AZURE_AI_SEARCH_ENDPOINT="https://YOUR-SEARCH-SERVICE.search.windows.net"
+AZURE_AI_SEARCH_KEY="YOUR-SEARCH-QUERY-KEY"
+AZURE_AI_SEARCH_INDEX_NAME="YOUR-SEARCH-INDEX"
+AZURE_AI_SEARCH_API_VERSION="2024-07-01"
+AZURE_AI_SEARCH_QUERY_TYPE="simple"
+```
+
+Optional GPU VM CLIP worker:
+
+```bash
+CLIP_WORKER_URL="http://YOUR-VM-PUBLIC-IP:8000"
+CLIP_WORKER_API_KEY="YOUR-CLIP-WORKER-SECRET"
+CLIP_WORKER_MODEL="clip-ViT-B-32"
+CLIP_WORKER_TIMEOUT_SECONDS="120"
+```
+
+Runtime paths:
+
+```bash
+ADS_LOCAL_DATA_DIR="data/raw"
+ADS_BLOB_CACHE_DIR="indexes/blob_cache"
+ADS_CLIP_MODEL_CACHE_DIR="indexes/model_cache/huggingface"
+# ADS_RUNTIME_DIR="/home/agentic-document-search"
+```
+
+Do not commit `.env`.
+
+## Ingest Documents
+
+Local folder:
+
+```bash
+.venv/bin/python src/ingest.py \
+  --data-dir data/raw \
+  --output indexes/files_index.json
+```
+
+Azure Blob:
+
 ```bash
 .venv/bin/python src/ingest.py \
   --source azure-blob \
@@ -70,80 +387,94 @@ Optional Azure Blob ingestion:
   --output indexes/files_index.json
 ```
 
-Search metadata locally:
-```bash
-python3 src/search.py --query "investor presentation" --mode local --top-k 3
-```
+On Azure App Service, if the index is missing and `AZURE_BLOB_CONTAINER_URL` is
+configured, the Streamlit app can create the Blob metadata index automatically.
 
-Run the visible agent flow:
-```bash
-python3 src/agent.py --query "find the investor presentation deck" --mode local
-```
+## Run The App
 
-Limit search by extension:
-```bash
-python3 src/agent.py --query "find the investor presentation deck" --extension .pdf
-```
+Streamlit UI:
 
-Run the Streamlit prototype:
 ```bash
 .venv/bin/streamlit run src/ui.py
 ```
 
-The UI offers four search modes:
+CLI agent:
+
+```bash
+.venv/bin/python src/agent.py \
+  --query "Find the telecom PDF with graphs" \
+  --mode llm \
+  --content-mode auto \
+  --translator-mode auto \
+  --top-k 3
+```
+
+Visual run:
+
+```bash
+.venv/bin/python src/agent.py \
+  --query "I remember a slide with a blue graph" \
+  --mode llm \
+  --content-mode auto \
+  --visual-prefilter clip \
+  --visual-mode azure \
+  --max-visual-files 3 \
+  --max-visual-pages-per-file 5 \
+  --max-clip-pages 10
+```
+
+Japanese query:
+
+```bash
+.venv/bin/python src/agent.py \
+  --query "青いグラフがある資料を探して" \
+  --mode llm \
+  --translator-mode auto \
+  --visual-mode azure
+```
+
+## Azure App Service Deployment
+
+Use Azure App Service as the application execution platform.
+
+Startup command:
+
+```bash
+python -m streamlit run src/ui.py --server.port 8000 --server.address 0.0.0.0
+```
+
+Set the values from `.env.example` as App Service environment variables. Do not
+upload the local `.env` file.
+
+Recommended App Service shape for the demo:
 
 ```text
-🤖 Auto      Semantic Kernel chooses the search strategy
-🚧 Safety    filename/folder-path reasoning with the fast model; no file content inspection
-🧠 Reasoning metadata reranking with the fast model, then content reranking with the deep model
-👁️ Visual    reasoning search + CLIP prefilter + Azure visual inspection
+Linux App Service
+Python 3.12
+Basic B1 or larger
+Always On enabled when available
 ```
 
-Above the prompt, the UI has neutral file-type buttons:
+The base deployment uses `requirements.txt`. Keep `requirements-clip.txt`
+outside the App Service deployment unless the plan can handle the heavier ML
+install. For the cleaner architecture, run CLIP on the Azure VM worker instead.
+
+## Azure VM CLIP Worker
+
+The optional worker lives in `vm_worker/`.
+
+It lets the architecture stay clean:
 
 ```text
-Excel | Word | PowerPoint | PDF
+App Service
+  handles UI, orchestration, Azure OpenAI, Translator, Vision
+
+Azure VM / GPU VM
+  handles heavier local visual page ranking
 ```
 
-They filter the candidate set before search. PDF selections can use the current
-visual page verifier. PowerPoint is treated as slide-like for mode selection;
-native PPTX visual rendering belongs in the VM rendering worker. Word/Excel-only
-searches skip visual inspection and rely on text inspection plus reasoning. The
-buttons intentionally avoid Microsoft product logos; they use plain labels and
-simple symbols.
+Run manually on the VM:
 
-The sidebar has an index refresh control. Refresh after files are added,
-deleted, renamed, or moved. Local refresh scans `data/raw`. Azure Blob refresh
-appears when `AZURE_BLOB_CONTAINER_URL` is configured.
-
-On Azure App Service, the app writes generated indexes and caches under a
-persistent runtime directory instead of the temporary deployment folder. If
-`indexes/files_index.json` is missing and `AZURE_BLOB_CONTAINER_URL` is set,
-the Streamlit app automatically creates the Blob metadata index before search.
-Set `ADS_RUNTIME_DIR` only if you want to override that runtime location.
-
-Open `⚙️ Customize mode` in the sidebar to override text inspection, Azure
-Translator, Azure AI Search, LLM usage, 📎 CLIP prefiltering, Azure visual
-inspection, and 🛠️ inspection limits.
-The app automatically adjusts dependent limits: Azure OpenAI candidate pool is
-kept at least as large as requested results, and 📎 CLIP page selection is kept
-large enough to cover the Azure visual inspection budget.
-
-Optional: install Semantic Kernel auto mode:
-```bash
-.venv/bin/python -m pip install -r requirements-semantic-kernel.txt
-```
-
-Optional: install the local CLIP visual prefilter:
-```bash
-.venv/bin/python -m pip install -r requirements-clip.txt
-```
-
-CLIP is off by default. Enable it from the UI only when you want local visual
-page ranking. Model files are cached under `indexes/model_cache/huggingface` by
-default instead of your home directory.
-
-Optional: run CLIP on an Azure GPU VM:
 ```bash
 cd vm_worker
 python3 -m venv .venv
@@ -152,298 +483,89 @@ python3 -m venv .venv
 .venv/bin/uvicorn app:app --host 0.0.0.0 --port 8000
 ```
 
-Then set these on the App Service:
+Set these on the worker:
+
+```bash
+AZURE_BLOB_CONTAINER_URL="https://YOUR-STORAGE.blob.core.windows.net/YOUR-CONTAINER?YOUR-SAS"
+CLIP_WORKER_API_KEY="choose-a-random-secret"
+CLIP_WORKER_DEVICE="auto"
+CLIP_WORKER_CACHE_DIR="worker_cache"
+```
+
+Set these on App Service:
+
 ```bash
 CLIP_WORKER_URL="http://YOUR-VM-PUBLIC-IP:8000"
-CLIP_WORKER_API_KEY="YOUR-CLIP-WORKER-SECRET"
-CLIP_WORKER_MODEL="clip-ViT-B-32"
-CLIP_WORKER_TIMEOUT_SECONDS="120"
+CLIP_WORKER_API_KEY="same-random-secret"
 ```
 
-When `CLIP_WORKER_URL` is configured, the app sends candidate Blob names to the
-VM and receives selected page numbers back. Azure Vision then inspects only
-those selected pages. If the worker URL is unset, the app uses the local CLIP
-runtime when it is installed.
-
-The agent flow currently shows:
+Restrict VM inbound access:
 
 ```text
-optional Semantic Kernel auto-mode planning
-→ optionally expand Japanese queries with Azure Translator
-→ filter by selected file types
-→ understand query
-→ search English/Japanese/mixed metadata
-→ optionally recall related previous searches from search memory
-→ optionally retrieve candidates from Azure AI Search
-→ inspect extracted English/Japanese/mixed text from top candidate documents when useful
-→ use local OCR fallback for scanned PDF pages when extracted text is too thin
-→ optionally prefilter rendered visual pages locally with CLIP
-→ decide whether visual inspection is needed next
-→ return ranked matches with reasons
+SSH
+  your IP only
+
+Port 8000
+  App Service outbound IPs only
 ```
 
-Force local content inspection for the top candidates:
-```bash
-.venv/bin/python src/agent.py --query "find a report about open source" --mode local --content-mode always
-```
+Deallocate the VM when the visual demo path is not being used.
 
-Japanese and mixed-language queries are supported in the local layer when the
-query and candidate documents share Japanese or English terms:
+## Current MVP Status
 
-```bash
-.venv/bin/python src/agent.py --query "売上分析のレポートを探して" --mode local
-.venv/bin/python src/agent.py --query "青いグラフがある資料" --mode local
-```
+Done:
 
-The local tokenizer uses Unicode normalization plus Japanese Kanji/Katakana
-term matching, so filenames and extracted text can be Japanese, English, or
-mixed. If the query is Japanese but the target document only contains English
-terms, use Azure OpenAI reranking or add Azure Translator query expansion later
-as a paid semantic bridge.
+- File-level metadata ingestion
+- Local and Azure Blob-ready index creation
+- Metadata search with reasons
+- Azure OpenAI metadata reranking
+- Candidate-only text extraction for PDF, PPTX, DOCX, XLSX/XLSM
+- Local OCR fallback for scanned PDF pages with thin text
+- Deep Azure OpenAI content reranking
+- Japanese/English mixed search support
+- Japanese reason rewriting for Japanese prompts
+- Search memory
+- Lazy content, visual, and CLIP caches
+- Local visual page skim
+- Optional CLIP prefilter
+- Optional Azure GPU VM CLIP worker
+- Azure Vision verification for selected rendered PDF pages
+- Optional Azure AI Search retrieval
+- Semantic Kernel auto mode
+- Streamlit UI for demo
+- Azure App Service deployment path
 
-Search metadata with Azure OpenAI reranking:
-```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
-```
+Next architecture ideas:
 
-Create a local `.env` file:
-```bash
-AZURE_OPENAI_ENDPOINT="https://YOUR-RESOURCE.cognitiveservices.azure.com/"
-AZURE_OPENAI_API_KEY="YOUR-KEY"
-AZURE_OPENAI_FAST_DEPLOYMENT="gpt-5.4-mini"
-AZURE_OPENAI_DEEP_DEPLOYMENT="gpt-5.4"
-# Optional fallback for older single-deployment setup.
-# AZURE_OPENAI_DEPLOYMENT="gpt-5-mini"
-AZURE_OPENAI_API_VERSION="2024-12-01-preview"
+- OneDrive / SharePoint connector through Microsoft Graph
+- Native PPTX slide rendering for visual inspection
+- Better page preview for the selected evidence page
+- Azure Document Intelligence only for layout/table-heavy prompts
+- More polished final answer generation after ranking
 
-# Azure Vision uses AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_API_KEY by default
-# when it lives in the same Azure AI Foundry resource.
-# AZURE_VISION_ENDPOINT="https://YOUR-SEPARATE-VISION-RESOURCE.cognitiveservices.azure.com/"
-# AZURE_VISION_KEY="YOUR-SEPARATE-VISION-KEY"
-AZURE_VISION_API_VERSION="2024-02-01"
-AZURE_VISION_FEATURES="caption,denseCaptions,tags,read,objects"
+## Hackathon Narrative
 
-# Azure Translator uses AZURE_OPENAI_API_KEY by default. The endpoint defaults
-# to https://api.cognitive.microsofttranslator.com.
-# AZURE_TRANSLATOR_KEY="YOUR-SEPARATE-TRANSLATOR-KEY"
-AZURE_TRANSLATOR_REGION="YOUR-AZURE-AI-RESOURCE-REGION"
-AZURE_TRANSLATOR_API_VERSION="3.0"
-
-AZURE_AI_SEARCH_ENDPOINT="https://YOUR-SEARCH-SERVICE.search.windows.net"
-AZURE_AI_SEARCH_KEY="YOUR-SEARCH-QUERY-KEY"
-AZURE_AI_SEARCH_INDEX_NAME="YOUR-SEARCH-INDEX"
-AZURE_AI_SEARCH_API_VERSION="2024-07-01"
-AZURE_AI_SEARCH_QUERY_TYPE="simple"
-AZURE_AI_SEARCH_SELECT_FIELDS="file_id,uri,relative_path,filename,title,content"
-
-AZURE_BLOB_CONTAINER_URL="https://YOUR-STORAGE-ACCOUNT.blob.core.windows.net/YOUR-CONTAINER?YOUR-SAS"
-# Optional Azure GPU VM CLIP worker. Leave unset until the VM endpoint is live.
-# CLIP_WORKER_URL="http://YOUR-VM-PUBLIC-IP:8000"
-# CLIP_WORKER_API_KEY="YOUR-CLIP-WORKER-SECRET"
-# CLIP_WORKER_MODEL="clip-ViT-B-32"
-# CLIP_WORKER_TIMEOUT_SECONDS="120"
-# Optional Azure App Service override. Leave unset locally.
-# ADS_RUNTIME_DIR="/home/agentic-document-search"
-ADS_LOCAL_DATA_DIR="data/raw"
-ADS_BLOB_CACHE_DIR="indexes/blob_cache"
-ADS_CLIP_MODEL_CACHE_DIR="indexes/model_cache/huggingface"
-```
-
-Run:
-```bash
-.venv/bin/python src/search.py --query "the board slide deck" --mode llm --top-k 3
-```
-
-Model routing:
+Business impact:
 
 ```text
-AZURE_OPENAI_FAST_DEPLOYMENT
-  Semantic Kernel planning and metadata-only reranking
-
-AZURE_OPENAI_DEEP_DEPLOYMENT
-  content-aware reranking after text extraction
-
-AZURE_OPENAI_DEPLOYMENT
-  optional single-deployment fallback
+Employees waste time because they remember documents by partial meaning,
+folder context, and visual memory, not exact filenames.
 ```
 
-Run the agent flow with Azure OpenAI metadata reranking:
-```bash
-.venv/bin/python src/agent.py --query "the board slide deck" --mode llm --top-k 3
-```
-
-The fast Azure OpenAI reranker receives only candidate file metadata. The agent
-can then inspect extracted PDF/PPTX/DOCX/XLSX text locally for top candidates
-when useful. When content evidence exists and LLM mode is enabled, the deep
-deployment reranks the candidates using only the extracted text samples,
-snippets, and metadata. Visual inspection renders only selected top-candidate
-PDF pages and sends those images to Azure Vision when `--visual-mode azure` is
-used or when `--visual-mode auto` sees visual clues.
-
-If a candidate PDF has very little extractable text, the content layer can use
-local Tesseract OCR as a fallback. This is intentionally local and free of Azure
-OCR calls. The fallback is best for scanned PDFs. PPTX/DOCX image-only OCR needs
-a separate slide/page rendering strategy, so it is left as a later architecture
-choice. OCR thresholds and languages are code-level constants in
-`src/content.py`, not environment variables. For Japanese scanned documents, the
-local machine or deployment image needs Japanese Tesseract language data.
-
-Run Azure Vision visual inspection:
-```bash
-.venv/bin/python src/agent.py \
-  --query "I remember a slide with a blue graph" \
-  --mode local \
-  --visual-prefilter clip \
-  --visual-mode azure \
-  --max-visual-files 2 \
-  --max-visual-pages-per-file 6 \
-  --max-clip-pages 3
-```
-
-With `--visual-prefilter clip`, the agent ranks rendered pages locally first and
-sends only the top CLIP-selected pages to Azure Vision. If CLIP is selected but
-not installed, Azure Vision is skipped to avoid sending unfiltered pages to a
-billable verifier. If CLIP needs to download its model, it uses
-`ADS_CLIP_MODEL_CACHE_DIR` rather than the default Hugging Face cache under your
-home directory.
-
-## Azure App Service
-
-For the hackathon deployment, Streamlit is the web interface and Azure App
-Service is the application execution platform.
-
-Use this startup command on App Service:
-
-```bash
-python -m streamlit run src/ui.py --server.port 8000 --server.address 0.0.0.0
-```
-
-Set the Azure OpenAI and Azure Vision values as App Service configuration
-environment variables. Do not upload a local `.env` file.
-
-The base deployment uses `requirements.txt`. CLIP is intentionally kept in
-`requirements-clip.txt` because it pulls in a heavier local ML stack. Add it to
-the deployment only if the App Service plan can handle the extra install size
-and startup time.
-
-## Final Azure Architecture
+Approach:
 
 ```text
-Azure App Service
-  Streamlit UI + agent controller
-
-Semantic Kernel
-  Auto mode chooses search strategy and tool sequence
-
-Azure Blob Storage
-  Stores demo source documents and supports cloud deployment
-
-Microsoft Graph / OneDrive / SharePoint
-  Enterprise source-of-truth integration for company documents
-
-Azure VM
-  Hosts heavier local workers for CLIP, OCR, and PDF/page rendering
-
-Microsoft Foundry / Azure OpenAI
-  Query planning, metadata reranking, and final explanation generation
-
-Azure AI Translator
-  Japanese-to-English query expansion for mixed-language search
-
-Azure AI Vision
-  Visual verification for selected rendered pages
-
-Azure AI Search
-  Optional retrieval tool, not the core product logic
+Agentic Document Search behaves like a human search partner:
+it guesses likely files first, opens only candidates, checks visual evidence
+only when needed, and explains why each result matched.
 ```
 
-The differentiation from Azure AI Search is the agentic loop. Azure AI Search
-can retrieve candidates, but this app decides when to search metadata, remember
-past searches, inspect text, inspect visuals, or stop early.
-
-## Business Narrative
-
-Many companies already require documents to live in approved cloud storage such
-as OneDrive or SharePoint. The product value is not "upload everything to a new
-AI database." The value is a policy-aware search agent that can investigate
-approved document locations with the minimum necessary computation.
-
-The app supports three trust levels:
+Operational value:
 
 ```text
-No-LLM mode
-  metadata + local text extraction + cached evidence
-
-Tenant AI mode
-  Azure OpenAI/Foundry inside the company's Azure environment
-
-Visual mode
-  selected page rendering + CLIP/Azure Vision only after candidate narrowing
+The architecture is cost-aware and policy-aware.
+Strict teams can use metadata/text-only modes.
+Azure-approved teams can enable Foundry, Translator, Vision, and VM workers.
+Documents can stay in approved cloud storage such as Blob, OneDrive, or
+SharePoint instead of being copied into an uncontrolled AI system.
 ```
-
-This lets strict organizations still get useful search without sending every
-document through an LLM. Teams with approved Azure AI policies can enable deeper
-reasoning and visual verification.
-
-## Data Efficiency
-
-The project uses two lightweight memory layers:
-
-```text
-lazy file cache
-  extracted text, OCR output, CLIP embeddings, and Azure Vision responses
-
-search memory
-  previous query, recalled documents, timestamp, and short reasons
-```
-
-Search memory is intentionally separate from the document index. It represents
-what the agent has already investigated, which is closer to human behavior than
-adding permanent visual labels to every document.
-
-## Roadmap / TODO
-
-### MVP v0
-- [x] Create repository structure
-- [x] Create metadata ingestion script
-- [x] Save file-level metadata as JSON
-- [x] Add simple keyword/fuzzy search over metadata
-- [x] Return top-k candidate files with reasons
-- [x] Add optional Azure OpenAI metadata reranking
-
-### MVP v1
-- [x] Read content only from candidate files
-- [x] Extract text from PDF
-- [x] Extract text from PPTX
-- [x] Extract text from DOCX
-- [x] Extract text from XLSX/XLSM
-- [x] Add local OCR fallback for scanned PDF pages with weak extracted text
-- [x] Support Japanese and Japanese/English mixed metadata and content search
-- [x] Search page/slide/chunk/sheet-level text only after file-level filtering
-- [x] Store compact canonical metadata and derive folder/type/display fields at load time
-- [x] Add search memory for previously investigated files
-
-### MVP v2
-- [x] Render selected PDF pages as images for visual inspection
-- [x] Add optional local CLIP page prefilter
-- [x] Wire Azure Vision analysis for selected candidate pages
-- [x] Add Azure Blob-ready document source and lazy blob download cache
-- [x] Add selected PDF page preview in Streamlit results
-- [ ] Add robust visual labels such as graph, table, blue theme, layout type
-- [ ] Search using visual memory queries
-
-### MVP v3
-- [x] Add Azure OpenAI metadata reranking
-- [x] Add optional Azure AI Search candidate retrieval
-- [x] Add Semantic Kernel auto-mode planner
-- [x] Generate user-facing explanation:
-  - why this file matched
-  - which metadata/content/visual clues were used
-- [ ] Generate a polished final natural-language answer with an LLM
-
-### Later idea: Lazy cache
-- [ ] Cache extracted text only after a file is opened once
-- [ ] Cache generated summaries only for frequently searched files
-- [ ] Cache visual labels only for pages/slides that were actually inspected
-- [ ] Avoid indexing everything heavily upfront
