@@ -282,15 +282,37 @@ def run_agent(
     if allowed_extensions is not None:
         add_step(steps, make_file_type_filter_step(records, allowed_extensions), step_callback)
 
+    emit_progress(steps, step_callback, "Translate Query")
+    translation = prepare_query_translation(query, translator_mode)
+    search_query = translation.expanded_query
+    clip_query = build_clip_query(query, translation)
+
+    translation_step = make_translation_step(translation, translator_mode)
+    if translation_step:
+        add_step(steps, translation_step, step_callback)
+
+    emit_progress(steps, step_callback, "Understand Query")
+    query_understanding = understand_query(search_query)
+    query_understanding.query = query
+    add_step(
+        steps,
+        AgentStep(
+            name="Understand Query",
+            status="done",
+            detail=format_understanding_detail(query_understanding),
+        ),
+        step_callback,
+    )
+
     if orchestration_mode == "semantic-kernel":
         emit_progress(steps, step_callback, "Semantic Kernel Auto Mode")
         strategy_plan = plan_search_strategy(
-            query=query,
+            query=search_query,
             azure_ai_search_available=not missing_azure_ai_search_config(),
         )
         mode = strategy_plan.mode
         content_mode = strategy_plan.content_mode
-        translator_mode = strategy_plan.translator_mode
+        strategy_plan.translator_mode = translator_mode
         visual_mode = strategy_plan.visual_mode
         visual_prefilter = strategy_plan.visual_prefilter
         azure_ai_search_mode = strategy_plan.azure_ai_search_mode
@@ -310,28 +332,6 @@ def run_agent(
         candidate_pool_size = top_k
     if visual_prefilter == "clip" and max_clip_pages < max_visual_pages_per_file:
         max_clip_pages = max_visual_pages_per_file
-
-    emit_progress(steps, step_callback, "Translate Query")
-    translation = prepare_query_translation(query, translator_mode)
-    search_query = translation.expanded_query
-    clip_query = build_clip_query(query, translation)
-    query_understanding = understand_query(search_query)
-    query_understanding.query = query
-
-    translation_step = make_translation_step(translation, translator_mode)
-    if translation_step:
-        add_step(steps, translation_step, step_callback)
-
-    emit_progress(steps, step_callback, "Understand Query")
-    add_step(
-        steps,
-        AgentStep(
-            name="Understand Query",
-            status="done",
-            detail=format_understanding_detail(query_understanding),
-        ),
-        step_callback,
-    )
 
     emit_progress(steps, step_callback, "Metadata Search")
     if mode == "local" or not records:

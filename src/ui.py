@@ -49,10 +49,10 @@ FILE_TYPE_CHOICES = {
 VISUAL_FILE_TYPE_KEYS = {"pdf"}
 TEXT_HEAVY_FILE_TYPE_KEYS = {"excel", "word"}
 FLOW_STEPS = [
-    ("Semantic Kernel Auto Mode", "Plan route"),
     ("File Type Filter", "File types"),
     ("Translate Query", "Translate"),
     ("Understand Query", "Read request"),
+    ("Semantic Kernel Auto Mode", "Plan route"),
     ("Metadata Search", "Names & folders"),
     ("Search Memory", "Recall"),
     ("Azure AI Search", "AI Search"),

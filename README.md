@@ -162,9 +162,9 @@ The current agent can run these steps:
 
 ```text
 1. File type filter
-2. Semantic Kernel auto-mode planning
-3. Azure Translator query expansion
-4. Query understanding
+2. Azure Translator query expansion
+3. Query understanding
+4. Semantic Kernel auto-mode planning
 5. Metadata search
 6. Azure OpenAI metadata rerank
 7. Search memory recall
