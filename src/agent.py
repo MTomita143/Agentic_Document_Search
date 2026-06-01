@@ -1225,6 +1225,7 @@ def apply_clip_evidence(
             continue
 
         result.score += evidence.score
+        add_preview_pages(result.record, evidence.selected_pages)
         if include_page_candidates:
             result.reasons.append(
                 "Visual page candidates: "
@@ -1263,11 +1264,33 @@ def apply_visual_evidence(
             continue
 
         result.score += evidence.score
+        add_preview_pages(result.record, pages_from_visual_observations(evidence.observations))
         result.reasons.append(
             "Visual analysis matched: " + ", ".join(evidence.matched_terms)
         )
         for observation in evidence.observations[:2]:
             result.reasons.append("visual observation " + observation)
+
+
+def add_preview_pages(record: dict[str, Any], pages: list[int]) -> None:
+    if not pages:
+        return
+
+    current = list(record.get("_preview_pages") or [])
+    for page in pages:
+        if page > 0 and page not in current:
+            current.append(page)
+    record["_preview_pages"] = current
+
+
+def pages_from_visual_observations(observations: list[str]) -> list[int]:
+    pages: list[int] = []
+    for observation in observations:
+        pages.extend(
+            int(value)
+            for value in re.findall(r"\bpage\s+(\d+)\b", observation, flags=re.IGNORECASE)
+        )
+    return pages
 
 
 def parse_content_cache_path(value: str) -> Path:

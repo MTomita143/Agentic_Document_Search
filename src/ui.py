@@ -1349,8 +1349,10 @@ def show_page_preview(result: object) -> None:
     if str(record.get("extension", "")).lower() != ".pdf":
         return
 
-    preview_pages = extract_preview_pages(result.reasons)
-    visual_panel = has_visual_evidence(result.reasons)
+    preview_pages = extract_preview_pages_from_result(result)
+    visual_panel = has_visual_evidence(result.reasons) or bool(
+        result.record.get("_preview_pages")
+    )
 
     try:
         image_paths = render_preview_pages(record, preview_pages[:4])
@@ -1390,6 +1392,17 @@ def has_visual_evidence(reasons: list[str]) -> bool:
     )
 
 
+def extract_preview_pages_from_result(result: object) -> list[int]:
+    pages = [
+        int(page)
+        for page in result.record.get("_preview_pages", [])
+        if int(page) > 0
+    ]
+    if pages:
+        return dedupe_pages(pages)
+    return extract_preview_pages(result.reasons)
+
+
 def extract_preview_pages(reasons: list[str]) -> list[int]:
     pages: list[int] = []
     for reason in reasons:
@@ -1406,12 +1419,15 @@ def extract_preview_pages(reasons: list[str]) -> list[int]:
                 for value in re.findall(r"\bpage\s+(\d+)\b", reason, flags=re.IGNORECASE)
             )
 
+    return dedupe_pages(pages) or [1]
+
+
+def dedupe_pages(pages: list[int]) -> list[int]:
     unique_pages = []
     for page in pages:
         if page not in unique_pages and page > 0:
             unique_pages.append(page)
-
-    return unique_pages or [1]
+    return unique_pages
 
 
 def render_preview_pages(
