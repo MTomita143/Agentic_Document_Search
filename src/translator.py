@@ -9,13 +9,13 @@ Japanese documents.
 from __future__ import annotations
 
 import json
-import os
 import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
 from dataclasses import dataclass
 
+from env_utils import get_env
 from search import has_cjk
 
 
@@ -105,11 +105,11 @@ def missing_translator_config() -> list[str]:
 
 def translate_text(text: str, to_language: str) -> tuple[str, str | None]:
     endpoint = str(
-        os.getenv("AZURE_TRANSLATOR_ENDPOINT", DEFAULT_TRANSLATOR_ENDPOINT)
+        get_env("AZURE_TRANSLATOR_ENDPOINT", DEFAULT_TRANSLATOR_ENDPOINT)
     ).rstrip("/")
     key = str(get_translator_key())
-    region = os.getenv("AZURE_TRANSLATOR_REGION")
-    api_version = os.getenv(
+    region = get_env("AZURE_TRANSLATOR_REGION")
+    api_version = get_env(
         "AZURE_TRANSLATOR_API_VERSION",
         DEFAULT_TRANSLATOR_API_VERSION,
     )
@@ -168,4 +168,4 @@ def translate_text(text: str, to_language: str) -> tuple[str, str | None]:
 
 
 def get_translator_key() -> str | None:
-    return os.getenv("AZURE_TRANSLATOR_KEY") or os.getenv("AZURE_OPENAI_API_KEY")
+    return get_env("AZURE_TRANSLATOR_KEY") or get_env("AZURE_OPENAI_API_KEY")

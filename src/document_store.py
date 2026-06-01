@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from blob_url import build_blob_url
+from env_utils import get_env
 
 
 DEFAULT_BLOB_CACHE_DIR = Path("indexes/blob_cache")
@@ -24,7 +25,7 @@ def resolve_document_path(record: dict[str, Any]) -> Path:
 
 
 def download_blob_to_cache(record: dict[str, Any]) -> Path:
-    container_url = os.getenv("AZURE_BLOB_CONTAINER_URL", "").strip()
+    container_url = get_env("AZURE_BLOB_CONTAINER_URL", "") or ""
     if not container_url:
         raise RuntimeError(
             "Azure Blob document source needs AZURE_BLOB_CONTAINER_URL."
@@ -50,7 +51,7 @@ def download_blob_to_cache(record: dict[str, Any]) -> Path:
 
 
 def build_blob_cache_path(record: dict[str, Any]) -> Path:
-    configured = os.getenv("ADS_BLOB_CACHE_DIR", "").strip()
+    configured = get_env("ADS_BLOB_CACHE_DIR", "") or ""
     cache_dir = Path(configured).expanduser() if configured else DEFAULT_BLOB_CACHE_DIR
     raw_key = "|".join(
         [

@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import urllib.parse
 
+from env_utils import clean_env_value
+
 
 @dataclass(frozen=True)
 class BlobContainerReference:
@@ -18,7 +20,7 @@ class BlobContainerReference:
 
 
 def parse_blob_container_url(url: str) -> BlobContainerReference:
-    parsed = urllib.parse.urlsplit(url.strip())
+    parsed = urllib.parse.urlsplit(clean_env_value(url) or "")
     path_parts = [part for part in parsed.path.split("/") if part]
     if not path_parts:
         return BlobContainerReference(container_url=url.strip(), prefix="")

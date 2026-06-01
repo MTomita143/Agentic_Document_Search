@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
+
+from env_utils import get_env
 
 
 DEFAULT_AZURE_OPENAI_API_VERSION = "2024-12-01-preview"
@@ -28,20 +29,20 @@ def get_azure_openai_config(
         )
 
     return AzureOpenAIConfig(
-        endpoint=str(os.getenv("AZURE_OPENAI_ENDPOINT")),
-        api_key=str(os.getenv("AZURE_OPENAI_API_KEY")),
+        endpoint=str(get_env("AZURE_OPENAI_ENDPOINT")),
+        api_key=str(get_env("AZURE_OPENAI_API_KEY")),
         deployment=str(deployment or resolve_deployment(purpose)),
         api_version=str(
-            os.getenv("AZURE_OPENAI_API_VERSION", DEFAULT_AZURE_OPENAI_API_VERSION)
+            get_env("AZURE_OPENAI_API_VERSION", DEFAULT_AZURE_OPENAI_API_VERSION)
         ),
     )
 
 
 def missing_azure_openai_config(purpose: str = "fast") -> list[str]:
     missing: list[str] = []
-    if not os.getenv("AZURE_OPENAI_ENDPOINT"):
+    if not get_env("AZURE_OPENAI_ENDPOINT"):
         missing.append("AZURE_OPENAI_ENDPOINT")
-    if not os.getenv("AZURE_OPENAI_API_KEY"):
+    if not get_env("AZURE_OPENAI_API_KEY"):
         missing.append("AZURE_OPENAI_API_KEY")
     if not resolve_deployment(purpose):
         missing.append(deployment_hint(purpose))
@@ -54,9 +55,9 @@ def resolve_deployment(purpose: str = "fast") -> str | None:
 
 
 def deployment_candidates(purpose: str = "fast") -> list[str]:
-    legacy = os.getenv("AZURE_OPENAI_DEPLOYMENT")
-    fast = os.getenv("AZURE_OPENAI_FAST_DEPLOYMENT")
-    deep = os.getenv("AZURE_OPENAI_DEEP_DEPLOYMENT")
+    legacy = get_env("AZURE_OPENAI_DEPLOYMENT")
+    fast = get_env("AZURE_OPENAI_FAST_DEPLOYMENT")
+    deep = get_env("AZURE_OPENAI_DEEP_DEPLOYMENT")
 
     if purpose == "deep":
         return dedupe([deep, legacy, fast])

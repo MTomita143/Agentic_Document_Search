@@ -8,13 +8,13 @@ text, visual pages, or memory.
 from __future__ import annotations
 
 import json
-import os
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
+from env_utils import get_env
 from search import SearchResult
 
 
@@ -34,11 +34,11 @@ class AzureAISearchConfig:
 
 def missing_azure_ai_search_config() -> list[str]:
     missing = []
-    if not os.getenv("AZURE_AI_SEARCH_ENDPOINT"):
+    if not get_env("AZURE_AI_SEARCH_ENDPOINT"):
         missing.append("AZURE_AI_SEARCH_ENDPOINT")
-    if not os.getenv("AZURE_AI_SEARCH_KEY"):
+    if not get_env("AZURE_AI_SEARCH_KEY"):
         missing.append("AZURE_AI_SEARCH_KEY")
-    if not os.getenv("AZURE_AI_SEARCH_INDEX_NAME"):
+    if not get_env("AZURE_AI_SEARCH_INDEX_NAME"):
         missing.append("AZURE_AI_SEARCH_INDEX_NAME")
     return missing
 
@@ -52,19 +52,19 @@ def load_azure_ai_search_config() -> AzureAISearchConfig:
         )
 
     return AzureAISearchConfig(
-        endpoint=str(os.getenv("AZURE_AI_SEARCH_ENDPOINT", "")).rstrip("/"),
-        key=str(os.getenv("AZURE_AI_SEARCH_KEY", "")),
-        index_name=str(os.getenv("AZURE_AI_SEARCH_INDEX_NAME", "")),
-        api_version=os.getenv(
+        endpoint=str(get_env("AZURE_AI_SEARCH_ENDPOINT", "")).rstrip("/"),
+        key=str(get_env("AZURE_AI_SEARCH_KEY", "")),
+        index_name=str(get_env("AZURE_AI_SEARCH_INDEX_NAME", "")),
+        api_version=get_env(
             "AZURE_AI_SEARCH_API_VERSION",
             DEFAULT_AZURE_SEARCH_API_VERSION,
         ),
-        select_fields=os.getenv(
+        select_fields=get_env(
             "AZURE_AI_SEARCH_SELECT_FIELDS",
             "file_id,uri,relative_path,filename,title,content",
         ),
-        query_type=os.getenv("AZURE_AI_SEARCH_QUERY_TYPE", "simple"),
-        semantic_configuration=os.getenv("AZURE_AI_SEARCH_SEMANTIC_CONFIG"),
+        query_type=str(get_env("AZURE_AI_SEARCH_QUERY_TYPE", "simple")),
+        semantic_configuration=get_env("AZURE_AI_SEARCH_SEMANTIC_CONFIG"),
     )
 
 

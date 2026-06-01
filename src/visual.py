@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 import urllib.error
 import urllib.parse
@@ -68,15 +67,15 @@ class VisualEvidence:
 
 def missing_vision_config() -> list[str]:
     names = []
-    endpoint = (
-        os.getenv("AZURE_VISION_ENDPOINT")
-        or os.getenv("VISION_ENDPOINT")
-        or os.getenv("AZURE_OPENAI_ENDPOINT")
+    endpoint = first_env(
+        "AZURE_VISION_ENDPOINT",
+        "VISION_ENDPOINT",
+        "AZURE_OPENAI_ENDPOINT",
     )
-    key = (
-        os.getenv("AZURE_VISION_KEY")
-        or os.getenv("VISION_KEY")
-        or os.getenv("AZURE_OPENAI_API_KEY")
+    key = first_env(
+        "AZURE_VISION_KEY",
+        "VISION_KEY",
+        "AZURE_OPENAI_API_KEY",
     )
 
     if not endpoint:
@@ -88,15 +87,15 @@ def missing_vision_config() -> list[str]:
 
 
 def load_vision_config() -> VisionConfig:
-    endpoint = (
-        os.getenv("AZURE_VISION_ENDPOINT")
-        or os.getenv("VISION_ENDPOINT")
-        or os.getenv("AZURE_OPENAI_ENDPOINT")
+    endpoint = first_env(
+        "AZURE_VISION_ENDPOINT",
+        "VISION_ENDPOINT",
+        "AZURE_OPENAI_ENDPOINT",
     )
-    key = (
-        os.getenv("AZURE_VISION_KEY")
-        or os.getenv("VISION_KEY")
-        or os.getenv("AZURE_OPENAI_API_KEY")
+    key = first_env(
+        "AZURE_VISION_KEY",
+        "VISION_KEY",
+        "AZURE_OPENAI_API_KEY",
     )
     api_version = os.getenv("AZURE_VISION_API_VERSION", DEFAULT_VISION_API_VERSION)
     features = os.getenv("AZURE_VISION_FEATURES", DEFAULT_VISION_FEATURES)
