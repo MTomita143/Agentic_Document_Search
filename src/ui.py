@@ -1043,7 +1043,7 @@ def show_empty_state() -> None:
         **Example queries**
 
         - ⚡ *生成AIについて説明した資料*
-        - 📦 *Merucariの決算資料、2024年からYoYが乗っているテーブルかexcel*
+        - 📦 *Merucariの決算資料、2024年からYoYが載っているテーブルかexcel*
         - 👁️ *赤い背景で2025年の業績グラフが載っていたスライド*
         """,
         unsafe_allow_html=True,
