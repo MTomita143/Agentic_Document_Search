@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from document_store import resolve_document_path
+from env_utils import first_env, get_env
 from search import SearchResult, has_cjk, normalize_text, tokenize
 
 
@@ -97,8 +98,8 @@ def load_vision_config() -> VisionConfig:
         "VISION_KEY",
         "AZURE_OPENAI_API_KEY",
     )
-    api_version = os.getenv("AZURE_VISION_API_VERSION", DEFAULT_VISION_API_VERSION)
-    features = os.getenv("AZURE_VISION_FEATURES", DEFAULT_VISION_FEATURES)
+    api_version = get_env("AZURE_VISION_API_VERSION", DEFAULT_VISION_API_VERSION)
+    features = get_env("AZURE_VISION_FEATURES", DEFAULT_VISION_FEATURES)
 
     missing = missing_vision_config()
     if missing:
