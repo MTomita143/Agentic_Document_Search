@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import os
-import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
+
+from blob_url import build_blob_url
 
 
 DEFAULT_BLOB_CACHE_DIR = Path("indexes/blob_cache")
@@ -46,20 +47,6 @@ def download_blob_to_cache(record: dict[str, Any]) -> Path:
         raise RuntimeError(f"Azure Blob download failed for {uri}: {error}") from error
 
     return cache_path
-
-
-def build_blob_url(container_url: str, blob_name: str) -> str:
-    parsed = urllib.parse.urlsplit(container_url.rstrip("/"))
-    path = parsed.path.rstrip("/") + "/" + urllib.parse.quote(blob_name, safe="/")
-    return urllib.parse.urlunsplit(
-        (
-            parsed.scheme,
-            parsed.netloc,
-            path,
-            parsed.query,
-            parsed.fragment,
-        )
-    )
 
 
 def build_blob_cache_path(record: dict[str, Any]) -> Path:

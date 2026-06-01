@@ -28,9 +28,10 @@ import json
 import os
 from pathlib import Path
 from typing import Any
-import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+
+from blob_url import build_blob_listing_url
 
 
 SUPPORTED_EXTENSIONS = {
@@ -113,16 +114,6 @@ def collect_azure_blob_metadata(container_url: str) -> list[dict[str, Any]]:
         )
 
     return records
-
-
-def build_blob_listing_url(container_url: str) -> str:
-    parsed = urllib.parse.urlsplit(container_url)
-    query_items = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
-    query_items.extend([("restype", "container"), ("comp", "list")])
-    query = urllib.parse.urlencode(query_items)
-    return urllib.parse.urlunsplit(
-        (parsed.scheme, parsed.netloc, parsed.path, query, parsed.fragment)
-    )
 
 
 def save_json(records: list[dict[str, Any]], output_path: Path) -> None:
