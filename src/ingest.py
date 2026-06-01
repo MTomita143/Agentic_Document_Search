@@ -28,10 +28,12 @@ import json
 import os
 from pathlib import Path
 from typing import Any
+import urllib.error
+import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 
-from blob_url import build_blob_listing_url
+from blob_url import build_blob_listing_url, parse_blob_container_url
 
 
 SUPPORTED_EXTENSIONS = {
@@ -84,11 +86,34 @@ def collect_file_metadata(data_dir: Path) -> list[dict[str, Any]]:
     return records
 
 
+
+def redact_query(url: str) -> str:
+    parsed = urllib.parse.urlsplit(url)
+    return urllib.parse.urlunsplit(
+        (parsed.scheme, parsed.netloc, parsed.path, "SAS_REDACTED", parsed.fragment)
+    )
+
+
 def collect_azure_blob_metadata(container_url: str) -> list[dict[str, Any]]:
     """List supported blobs from an Azure Blob container URL with read/list access."""
     listing_url = build_blob_listing_url(container_url)
-    with urllib.request.urlopen(listing_url, timeout=60) as response:
-        body = response.read()
+    try:
+        with urllib.request.urlopen(listing_url, timeout=60) as response:
+            body = response.read()
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            reference = parse_blob_container_url(container_url)
+            raise RuntimeError(
+                "Azure Blob container was not found. "
+                "AZURE_BLOB_CONTAINER_URL must point to an existing container, "
+                "not only a virtual folder name. "
+                f"Parsed container URL: {redact_query(reference.container_url)}. "
+                f"Parsed prefix: {reference.prefix or '(none)'}. "
+                "Use https://ACCOUNT.blob.core.windows.net/CONTAINER?SAS, "
+                "or https://ACCOUNT.blob.core.windows.net/CONTAINER/PREFIX?SAS "
+                "when PREFIX is a folder inside that container."
+            ) from error
+        raise
 
     root = ET.fromstring(body)
     records: list[dict[str, Any]] = []
