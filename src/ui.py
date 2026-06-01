@@ -94,7 +94,7 @@ def main() -> None:
     )
     query = st.text_area(
         label="Any clues about the document?",
-        placeholder="例: Apache関連のスライドで、昨年度の投資のフローチャートが載ってる",
+        placeholder="Content, graphs, colors, layout, keywords...",
         key="query_input",
         label_visibility="collapsed",
         height=112,
@@ -1042,9 +1042,9 @@ def show_empty_state() -> None:
 
         **Example queries**
 
-        - ⚡ *Apache関連だった気がする、Engineering配下にあった年次レポート*
-        - 📦 *A document discussing open-source ecosystem trends and community growth in 2025.*
-        - 👁️ *A telecom-related presentation with revenue graphs and a distinctive magenta corporate design.*
+        - ⚡ *生成AIについて説明した資料*
+        - 📦 *Merucariの決算資料、2024年からYoYが乗っているテーブルかexcel*
+        - 👁️ *赤い背景で2025年の業績グラフが載っていたスライド*
         """,
         unsafe_allow_html=True,
     )
