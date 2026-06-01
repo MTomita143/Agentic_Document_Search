@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -99,12 +100,28 @@ def inspect_content_for_results(
             )
             continue
 
-        extracted = get_or_extract_document_text(
-            record=record,
-            cache=cache,
-            max_units=max_pages_per_file,
-            max_chars=max_chars_per_file,
-        )
+        try:
+            extracted = get_or_extract_document_text(
+                record=record,
+                cache=cache,
+                max_units=max_pages_per_file,
+                max_chars=max_chars_per_file,
+            )
+        except Exception as error:
+            evidence.append(
+                ContentEvidence(
+                    file_id=str(record.get("file_id")),
+                    score=0,
+                    matched_terms=[],
+                    snippets=[],
+                    inspected_pages=0,
+                    page_count=0,
+                    cache_hit=False,
+                    error=format_content_extraction_error(record, error),
+                )
+            )
+            continue
+
         evidence.append(score_extracted_text(query, extracted))
 
     save_cache(cache_path, cache)
@@ -147,6 +164,21 @@ def get_or_extract_document_text(
     return extracted
 
 
+
+def format_content_extraction_error(record: dict[str, Any], error: Exception) -> str:
+    filename = str(record.get("filename") or record.get("uri") or "candidate file")
+    extension = str(record.get("extension", "")).lower()
+
+    if isinstance(error, zipfile.BadZipFile) or "not a zip file" in str(error).lower():
+        return (
+            f"Could not read {filename} as {extension or 'an Office file'} because "
+            "it is not a valid zip-based Office document. Legacy .doc/.ppt/.xls "
+            "or mislabeled files should be converted to .docx/.pptx/.xlsx or PDF."
+        )
+
+    return f"Could not extract text from {filename}: {error}"
+
+
 def extract_document_text(
     record: dict[str, Any],
     max_units: int,
@@ -156,13 +188,13 @@ def extract_document_text(
 
     if extension == ".pdf":
         extracted = extract_pdf_text(record, max_pages=max_units, max_chars=max_chars)
-    if extension == ".pptx":
+    elif extension == ".pptx":
         extracted = extract_pptx_text(record, max_slides=max_units, max_chars=max_chars)
-    if extension == ".docx":
+    elif extension == ".docx":
         extracted = extract_docx_text(record, max_chunks=max_units, max_chars=max_chars)
-    if extension in {".xlsx", ".xlsm"}:
+    elif extension in {".xlsx", ".xlsm"}:
         extracted = extract_xlsx_text(record, max_sheets=max_units, max_chars=max_chars)
-    if extension not in SUPPORTED_CONTENT_EXTENSIONS:
+    else:
         raise ValueError(f"content extraction for {extension} is not supported yet")
 
     return add_local_ocr_fallback_if_needed(
